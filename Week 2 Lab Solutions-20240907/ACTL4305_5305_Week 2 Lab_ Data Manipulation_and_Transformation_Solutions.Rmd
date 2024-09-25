@@ -1,0 +1,625 @@
+---
+title: "ACTL4305/5305 Actuarial Data Analytic Application"
+author: "Week 2: Data Manipulation and Transformation"
+date: "Proposed Solutions" 
+output: 
+  bookdown::pdf_book:
+    keep_tex: false
+    number_sections: yes
+    toc: false
+bibliography: [refWeek2.bib]
+biblio-style: apalike
+link-citations: yes
+colorlinks: true
+fontsize: 10pt
+fig_caption: yes
+linestretch: 1
+geometry: margin=2.3cm
+classoption: oneside
+graphics: yes
+fontfamily: mathpazo
+header-includes:
+  - \usepackage{float}
+  - \usepackage{booktabs}
+  - \usepackage{multicol}
+  - \floatplacement{figure}{H}
+  - \usepackage[table]{xcolor}
+  - \usepackage{amsmath}
+  - \usepackage{bm}
+  - \usepackage{mdframed}
+  - |
+    \newmdenv[
+      topline=true,
+      bottomline=true,
+      rightline=true,
+      leftline=true,
+      linewidth=1pt,
+      roundcorner=5pt,
+      backgroundcolor=white,
+      linecolor=black,
+      font=\normalfont
+    ]{taskbox}
+---
+
+# Learning Objectives {.unnumbered}
+
+-   Learn how to do data importing, quality check and cleansing.
+
+-   Learn how to do data manipulation and transformation.
+
+```{r global-options, include=FALSE}
+knitr::opts_chunk$set(warning=FALSE, message=FALSE,fig.width=5, fig.height=4, fig.align =  'center')
+```
+
+# Case study A - French Insurance Dataset
+
+We will continue to use the `freMTPL2freq` dataset. As a preview, this dataset includes risk features collected for 677,991 motor third-party liability policies, observed mostly over one year. In addtion, `freMTPL2freq` contains both the risk features and the claim number per policy. The `freMTPL2freq` dataset consists of 12 columns:
+
+-   `IDpol`: The policy ID (used to link with the claims dataset).
+
+-   `ClaimNb`: Number of claims during the exposure period.
+
+-   `Exposure`: The period of exposure for a policy, in years.
+
+-   `Area`: The area code.
+
+-   `VehPower`: The power of the car (ordered categorical).
+
+-   `VehAge`: The vehicle age, in years.
+
+-   `DrivAge`: The driver age, in years (in France, people can drive a car at 18).
+
+-   `BonusMalus`: Bonus/malus, between 50 and 350: \<100 means bonus, \>100 means malus in France.
+
+-   `VehBrand`: The car brand (unknown categories).
+
+-   `VehGas`: The car gas, Diesel or regular.
+
+-   `Density`: The density of inhabitants (number of inhabitants per km2) in the city the driver of the car lives in.
+
+-   `Region`: The policy regions in France (based on a standard French classification).
+
+Let's first import the data, and then begin by briefly examining it.
+
+```{r echo=TRUE}
+# Load the required packages
+library(CASdatasets)
+library(tidyverse)
+
+# Load the data
+data(freMTPL2freq)
+
+# Briefly check the data
+str(freMTPL2freq)
+summary(freMTPL2freq)
+```
+
+From the outputs above, we can see that there are `r nrow(freMTPL2freq)` individual car insurance policies and `r ncol(freMTPL2freq)` variables associated with each policy. At first glance, without further checking, we notice that the data types of some columns may need adjustment. For example, `ClaimNb` is stored as a table, and `VehGas` is stored as a character. We may want to convert these to integer and factor, respectively. However, note that some modeling packages are smart enough to handle this automatically, so we may not need to do this ourselves.
+
+```{r echo=TRUE}
+# Load the required packages
+# Convert ClaimNb from a table to integer
+freMTPL2freq$ClaimNb <- as.integer(as.numeric(freMTPL2freq$ClaimNb))
+
+# Convert VehGas from character to factor
+freMTPL2freq$VehGas <- as.factor(freMTPL2freq$VehGas)
+
+# Recheck the data structure after adjustment 
+# str(freMTPL2freq)
+# summary(freMTPL2freq)
+```
+
+## Task Solution: Are There Any NA (Missing) Values Present in the Dataset?
+
+```{r echo=TRUE}
+# Check for NA values in freMTPL2freq
+na_summary_freq <- sapply(freMTPL2freq, function(x) sum(is.na(x)))
+print(na_summary_freq)
+```
+
+Fortunately, there are no missing values in this dataset.
+
+## Task Solution: Check the Distribution of Claim Exposure and Number of Claims, and Comment on Any Unusual Observations
+
+```{r echo=TRUE, fig.align='center', fig.height=3, fig.width=4.5}
+# Histogram of claim exposure using ggplot2
+ggplot(freMTPL2freq, aes(x = Exposure)) +
+  geom_histogram(binwidth = 0.1, fill = "lightblue", color = "black") +
+  labs(title = "Distribution of Claim Exposure", x = "Exposure", y = "Frequency") +
+  theme_minimal()
+
+# Density plot of claim exposure using ggplot2
+ggplot(freMTPL2freq, aes(x = Exposure)) +
+  geom_density(fill = "blue", alpha = 0.5) +
+  labs(title = "Density Plot of Claim Exposure", x = "Exposure", y = "Density") +
+  theme_minimal()
+
+# Boxplot of claim exposure using ggplot2
+ggplot(freMTPL2freq, aes(y = Exposure)) +
+  geom_boxplot(fill = "lightgreen", color = "black") +
+  labs(title = "Boxplot of Claim Exposure", y = "Exposure") +
+  theme_minimal()
+
+# Frequency table of the number of claims using dplyr
+freMTPL2freq %>%
+  count(ClaimNb) %>%
+  print()
+```
+
+We consider several plots to depict the distribution of claim exposure. Typically, you would only need to show one of these if you want to include exposure in your EDA. Note that some exposures are greater than one year (i.e., `r sum(freMTPL2freq$Exposure > 1, na.rm = TRUE)` policies). Additionally, we present the frequency table of the number of claims. There are only `r sum(freMTPL2freq$ClaimNb > 4, na.rm = TRUE)` policies with more than 4 claims, as shown in the table. Without further information, it is difficult to determine whether these entries are errors or not. You can choose to keep them or consider capping them (e.g., in @noll2020case, all exposures greater than 1 are set to 1, and all claim numbers greater than 4 are set to 4).
+
+## Task Solution: Check if `Area` Is an Ordinal Categorical Variable
+
+```{r echo=TRUE, fig.align='center', fig.height=3, fig.width=4.5}
+# Calculate total exposure per area code
+total_exposure_per_area <- freMTPL2freq %>%
+  group_by(Area) %>%
+  summarise(TotalExposure = sum(Exposure, na.rm = TRUE))
+
+# Bar plot of total exposure per area code using ggplot2
+ggplot(total_exposure_per_area, aes(x = Area, y = TotalExposure)) +
+  geom_bar(stat = "identity", fill = "lightblue") +
+  labs(title = "Total Exposure per Area Code", x = "Area Code", y = "Total Exposure") +
+  theme_minimal() 
+
+# Calculate claim frequency per area code
+claim_frequency_per_area <- freMTPL2freq %>%
+  group_by(Area) %>%
+  summarise(TotalClaims = sum(ClaimNb, na.rm = TRUE),
+            TotalExposure = sum(Exposure, na.rm = TRUE),
+            ClaimFrequency = TotalClaims / TotalExposure)
+
+# Bar plot of claim frequency per area code using ggplot2
+ggplot(claim_frequency_per_area, aes(x = Area, y = ClaimFrequency)) +
+  geom_bar(stat = "identity", fill = "lightgreen") +
+  labs(title = "Observed Claim Frequency per Area Code", x = "Area Code", y = "Claim Frequency") +
+  theme_minimal() 
+```
+
+We first checked whether the level of total exposure is roughly the same for each area, which is not the case; Area F clearly has the lowest total exposure. Then, by examining the observed claim frequency per area code, we confirmed that `Area` is an ordinal categorical variable, as the observed claim frequency increases consistently from Area A to Area F.
+
+```{=tex}
+\begin{taskbox}
+\textbf{Exercise:} Is `VehPower` an ordinal variable? Can you follow the code above to check this?
+\end{taskbox}
+```
+## Task Solution: Explore the Relationship Between Age and Claim Frequency. How Does Age Influence the Frequency of Claims?
+
+```{r echo=TRUE, fig.align='center', fig.height=3, fig.width=4.5}
+# Calculate total exposure per driver's age group
+total_exposure_per_age <- freMTPL2freq %>%
+  group_by(DrivAge) %>%
+  summarise(TotalExposure = sum(Exposure, na.rm = TRUE)) %>%
+  arrange(DrivAge)
+
+# Bar plot of total exposure per driver's age group using ggplot2
+ggplot(total_exposure_per_age, aes(x = DrivAge, y = TotalExposure)) +
+  geom_bar(stat = "identity", fill = "lightblue") +
+  labs(title = "Total Exposure per Driver's Age Group", x = "Driver's Age", y = "Total Exposure") +
+  theme_minimal() 
+
+# Calculate observed frequency per driver's age group
+observed_frequency_per_age <- freMTPL2freq %>%
+  group_by(DrivAge) %>%
+  summarise(TotalClaims = sum(ClaimNb, na.rm = TRUE),
+            TotalExposure = sum(Exposure, na.rm = TRUE),
+            ObservedFrequency = TotalClaims / TotalExposure) %>%
+  arrange(DrivAge)
+
+# Line plot of observed frequency per driver's age group using ggplot2
+ggplot(observed_frequency_per_age, aes(x = DrivAge, y = ObservedFrequency)) +
+  geom_point(color = "red", size = 2) +
+  labs(title = "Observed Frequency per Driver's Age Group", x = "Driver's Age", y = "Observed Frequency") +
+  theme_minimal()
+```
+
+From the above plots, we can observe that the relationship between the predictor `Age` and the observed claim frequency is non-linear. Please note this, as we will explore how to incorporate this into modeling in the coming weeks.
+
+```{=tex}
+\begin{taskbox}
+\textbf{Exercise:} Can you follow the code above or write your own code to explore the relationship between the (observed) claim frequency and other predictors in the dataset? Did you find any interesting findings?
+\end{taskbox}
+```
+## Task Solution: Analyze the Interrelationships Between the Various Predictors in the Dataset. Identify Any Significant Correlations or Dependencies, and Discuss Their Potential Implications for Modeling.
+
+```{r}
+# Convert the Area factor to numeric based on its levels
+freMTPL2freq$AreaNumeric <- as.numeric(as.ordered(freMTPL2freq$Area))
+
+# Select the relevant variables
+correlation_data <- freMTPL2freq %>%
+  select(AreaNumeric, VehPower, VehAge, DrivAge, BonusMalus, Density)
+
+# Calculate the Pearson correlation matrix
+correlation_matrix <- cor(correlation_data, method = "pearson")
+
+# Display the correlation matrix
+print(correlation_matrix)
+
+# Load additional packages for visualization if needed
+library(ggcorrplot)
+
+# Visualize the Pearson correlation matrix
+ggcorrplot(correlation_matrix, 
+           method = "circle", 
+           type = "lower", 
+           lab = TRUE, 
+           title = "Pearson Correlation Matrix")
+```
+
+Here, we focus on checking the correlations between numerical and ordinal categorical features. Notably, there is a strong positive correlation between `Area` and `Density`, followed by a negative dependence between `DrivAge` and `BonusMalus`. Examining relationships between features is important because it helps identify multicollinearity, reveals potential interactions, and provides insights into how features jointly influence the target variable.
+
+```{=tex}
+\begin{taskbox}
+\textbf{Exercise:} In the above, we only considered Pearson's correlation between numerical features. Can you explore more of the interrelationships between predictors? For example, we might be interested in how vehicle brand interplays with other vehicle characteristics, or even with driver or policy characteristics.
+
+For your reference, you can refer to \href{https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3164764}{Noll,
+Salzmann, and Wuthrich (2020)} for some in-depth bivariate analysis in EDA for this dataset.
+\end{taskbox}
+```
+# Case study B - Default of Credit Card Clients
+
+The data set is the customers' default payments which include $30000$ instances described over 24 attributes. The data can be downloaded from [link](https://archive.ics.uci.edu/ml/machine-learning-databases/00350/). This case study considers the customers default payments in Taiwan and compares the predictive accuracy of probability of default among the shrinkage techniques namely lasso, ridge, and elastic net regression and non-shrinkage methods such as logistic regression. This case study employs a binary variable, default payment (Yes $=1$, No $= 0$), as the response variable. The data used in this case study have 23 variables as explanatory variables:
+
+-   $X1$: Amount of the given credit (NT dollar): it includes both the individual consumer credit and his/her family (supplementary) credit.
+
+-   $X2$: Gender ($1 =$ male; $2 =$ female).
+
+-   $X3$: Education ($1 =$ graduate school; $2 =$ university; $3 =$ high school; $4 =$ others).
+
+-   $X4$: Marital status ($1 =$ married; $2 =$ single; $3 =$ others).
+
+-   $X5$: Age (year).
+
+-   $X6 - X11$: History of past payment. We tracked the past monthly payment records (from April to September, 2005) as follows: $X6=$ the repayment status in September, 2005; $X7 =$ the repayment status in August, 2005; $\ldots$; $X11 =$ the repayment status in April, $2005$. The measurement scale[^1] for the repayment status is: $-2$: No consumption; $-1$: Paid in full; $0$: The use of revolving credit; $1$ = payment delay for one month; $2$ = payment delay for two months; . . .; $8$ = payment delay for eight months; $9$ = payment delay for nine months and above.
+
+-   $X12- X17:$ Amount of bill statement (NT dollar). $X12 =$ amount of bill statement in September, 2005; $X13 =$ amount of bill statement in August, 2005; $\ldots$ ; $X17 =$ amount of bill statement in April, 2005.
+
+-   $X18 - X23:$ Amount of previous payment (NT dollar). $X18 =$ amount paid in September, $2005$; $X19 =$ amount paid in August, $2005;\ldots; X23 =$ amount paid in April, $2005$.
+
+[^1]: The original data set description is inconsistent with the data; updated according to <https://www.kaggle.com/datasets/uciml/default-of-credit-card-clients-dataset/discussion/34608>.
+
+## Import data
+
+-   The credit card issuers in Taiwan faced the cash and credit card debt crisis in 2005. To increase market share, card-issuing banks in Taiwan over-issued cash and credit cards to unqualified applicants. At the same time, most cardholders, irrespective of their repayment ability, they overused credit card for consumption and accumulated heavy credit and cash card debts. The crisis caused the blow to consumer finance confidence and it was a big challenge for both banks and cardholders. In a well-developed financial system, crisis management is on the downstream and risk prediction is on the upstream. The major purpose of risk prediction is to use financial information, such as business financial statements, customer transactions, and repayment records to predict business performance or individual customers' credit risk and to reduce the damage and uncertainty.
+
+-   This tutorial focus on how to pre-process the data before using the machine learning techniques to predict the response variable.
+
+-   In this tutorial, we use the credit data of the credit card clients in Taiwan. The data set is the customers' default payments which include $30000$ instances described over 24 attributes. This dataset contains information on default payments, demographic factors, credit data, history of payment, and bill statements of credit card clients in Taiwan from April 2005 to September 2005.
+
+-   Loading the required packages
+
+```{r load-packages, warning = FALSE, message = FALSE}
+library(data.table)
+library(readxl)
+library(ggplot2)
+library(tidyverse)
+library(naniar)
+library(corrplot)
+library(caret)
+library(gridExtra)
+library(ggcorrplot)
+library(glmnet) 
+```
+
+-   Importing data
+
+```{r, load-data, warning = FALSE, message = FALSE}
+data <- read_excel("credit.xls", skip = 1)
+```
+
+-   Understanding the data structure
+
+```{r, structure-data, warning=FALSE}
+dim(data) # dimension of data
+str(data) # structure of data
+```
+
+-   Renaming some columns
+
+```{r, rename-data, warning = FALSE, message = FALSE}
+colnames(data)[colnames(data) == "PAY_0"] = "PAY_1"
+colnames(data)[colnames((data)) == "default payment next month"] = "default"
+data$default <- as.factor(data$default) # changes it
+data$SEX <- as.factor(data$SEX)
+```
+
+## Task Solution: Are there any missing values in the data? If there are any missing values suggest the ways to impute them. Use the suggested method to impute the missing values.
+
+### Checking missing values in the data.
+
+```{r, checking-missing-values, warning = FALSE, message = FALSE, fig.align='center', fig.height=3, fig.width=4.5}
+vis_miss(data) # 0% of them are N.A.
+colSums(is.na(data))
+summary(data)
+unique(data%>%select("MARRIAGE"))
+unique(data%>%select("EDUCATION"))
+length(data%>%filter(MARRIAGE==0)%>%pull("MARRIAGE"))
+length(data%>%filter(EDUCATION==0)%>%pull("EDUCATION"))
+```
+
+-   No direct missing values in the data. However, when we look at the summary of the data, there are some missing values in marriage and education named $0$.
+
+### Possible ways to impute the missing values.
+
+-   Impute the missing value in marriage and education by naming the missing values as "others".
+
+-   The missing values can also be imputed using the mode value.
+
+### Impute the missing values.
+
+```{r, impute-missing-values, warning = FALSE, message = FALSE, fig.align='center', fig.height=3, fig.width=5}
+
+mplot1 <- ggplot(data = data, mapping = aes(x = MARRIAGE, fill = default)) +
+  geom_bar() + theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Before Imputing") + stat_count(aes(label = ..count..))
+
+# impute missing values in marriage 
+# replace 0s values with 3 (others) 
+
+data$MARRIAGE = ifelse(data%>%select(MARRIAGE) == 0, 3, data$MARRIAGE)
+unique(data%>%select("MARRIAGE"))
+
+mplot2 <-ggplot(data = data, mapping = aes(x = MARRIAGE, fill = default)) +
+  geom_bar() + theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("After Imputing") + stat_count(aes(label = ..count..))
+
+grid.arrange(mplot1, mplot2, ncol = 2)
+
+# impute missing values in education
+# replace 0s values with 3 (others), and merge 5,and 6 to others. 
+
+eplot1 <- ggplot(data = data, mapping = aes(x = EDUCATION, fill = default)) +
+  geom_bar() + theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Before Imputing") + stat_count(aes(label = ..count..))
+
+data$EDUCATION = ifelse(data%>%select(EDUCATION)== 0 |data%>%select(EDUCATION) == 5 
+                        |data%>%select(EDUCATION) == 6, 4, data$EDUCATION) 
+# we want to replace 0,5,6 by 4
+unique(data%>%select("EDUCATION"))
+
+eplot2 <- ggplot(data = data, mapping = aes(x = EDUCATION, fill = default)) +
+  geom_bar() + theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("After Imputing") + stat_count(aes(label = ..count..))
+
+grid.arrange(eplot1, eplot2, ncol = 2)
+```
+
+## Task Solution: Using visualizations, explore the predictor variables to understand their distributions as well as the relationships between predictors.
+
+### Exploration of Social Status Predictors
+
+```{r, distributions-social-predictors, warning = FALSE, message = FALSE, fig.align='center', fig.height=3, fig.width=6}
+
+# Checking the number of defaulters 
+
+par(mfrow=c(1,3))
+
+# Number of defaulters in marriage
+
+count <- table(data$MARRIAGE, data$default)/rowSums(table(data$MARRIAGE, data$default))
+barplot(count[,2], col = "skyblue4", main = 'Defaulters on Marriage')
+
+# Number of defaulters in education
+
+count1 <- table(data$EDUCATION, data$default)/rowSums(table(data$EDUCATION, data$default))
+barplot(count1[,2], col = "skyblue4", main = 'Defaulters on Education')
+
+# Number of defaulters in gender (sex)
+
+count3 <- table(data$SEX, data$default)/rowSums(table(data$SEX, data$default))
+barplot(count3[,2], col = "skyblue4", main = 'Defaulters on Gender')
+```
+
+-   Male persons (male $= 1$) have more chances to default.
+
+-   The better education the lower chances to default.
+
+-   Married persons have more chances to default.
+
+### Exploration of response variable
+
+```{r, distributions-response-variable, warning = FALSE, message = FALSE, fig.align='center', fig.height=3.5, fig.width=4.5}
+
+# proportion of defaulters vs non-defaulters 
+
+prop <- prop.table(table(data%>%select(default)))
+barplot(prop, ylab = "Prop", xlab = "Default", col = c("skyblue4","orange"),
+        legend = rownames(prop), beside = TRUE)
+```
+
+20% at 1, 80% at 0 - Target variable variable is imbalanced. This can be solved by under-sampling, over-sampling or no sampling.
+
+### Exploration of age variable
+
+```{r, distribution-age, warning = FALSE, message = FALSE, fig.align='center', fig.height=3, fig.width=4.5}
+
+# box plot for age by default
+
+ggplot(data = data, aes(x = as.factor(default), y = AGE, colour = default))+ 
+  geom_boxplot(fill="skyblue4") + theme(plot.title = element_text(hjust = 0.5))+
+  labs(title='Age by Default', x= 'Default', y ='Age')
+
+# distribution of age 
+
+plot1 <- ggplot(data, aes(x = AGE))+ 
+  geom_histogram(aes(x = AGE), color ="blue", fill="skyblue4") + 
+  labs(x ="Age",y ="Counts") + theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Age Distribution") 
+
+plot2 <- ggplot(data = data, mapping = aes(x = AGE)) + 
+  geom_density(fill="skyblue4") + theme(plot.title = element_text(hjust = 0.5)) +
+  ggtitle("Age Distribution") +
+  xlab("Age")
+
+grid.arrange(plot1, plot2, ncol = 2)
+
+data %>% 
+  group_by(AGE) %>% 
+  summarize(default_rate=sum(as.double(default)-1)/length(AGE)) %>% 
+  ggplot(aes(x=AGE, y=default_rate)) + geom_point() + geom_smooth()
+```
+
+-   In general, we cannot see any obvious patterns in the above plot.
+
+### Exploration of balance limit variable
+
+```{r, distrution-balance-limit, warning = FALSE, message = FALSE, fig.align='center', fig.height=3, fig.width=5}
+
+summary(data%>%select("LIMIT_BAL"))
+
+# box plot for limit balance by default
+
+ggplot(data = data, aes(x = as.factor(default), y = LIMIT_BAL, colour = default))+ 
+  geom_boxplot(fill="skyblue4") + theme(plot.title = element_text(hjust = 0.5))+ 
+  labs(title='Limit Balance by Default', x= 'Default', y ='Limit Balance')
+
+plot_bal1 <- ggplot(data, aes(x = LIMIT_BAL))+ 
+  geom_histogram(aes(x = LIMIT_BAL), color ="blue", fill="skyblue4") + 
+  labs(x ="LIMIT_BAL",y ="Counts") + theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Limit Balance Distribution")
+
+# distribution of limit balance
+
+plot_bal2 <- ggplot(data = data, mapping = aes(x = LIMIT_BAL)) + 
+  geom_density(fill="skyblue4") + theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Limit Balance Distribution") +
+  xlab("LIMIT_BAL")
+
+grid.arrange(plot_bal1, plot_bal2, ncol = 2)
+```
+
+-   The lower the amount of given credit limit of the balance owing, the bigger the chances to default.
+
+### Exploration of amount of bill statement variable
+
+```{r, disribution-bill-amount, warning = FALSE, message = FALSE}
+
+billamt_colsnames  <- paste0("BILL_AMT", c(1, 2:6))
+data1 <- data%>%select(starts_with("BILL_AMT"))
+summary(data1)
+
+# box plot of the bill amount 
+
+plot <- lapply(1:ncol(data1), function(x) ggplot(data = data, 
+       mapping = aes(x = default, y = data1[[x]], colour = default)) +
+      geom_boxplot() + theme_minimal() +  labs(y = "Amount", x = "Default"))
+do.call(grid.arrange, c(plot, ncol = 2, nrow = 3))
+
+# histogram of the bill amount 
+
+plot <- lapply(1:ncol(data1), function(x) ggplot(data = data1, mapping = aes(x = data1[[x]])) + 
+  geom_histogram(fill = "skyblue4") + theme_minimal() + xlab(paste0(billamt_colsnames[x])) + 
+          labs(y = "Amount"))
+do.call(grid.arrange, c(plot, ncol = 2, nrow = 3))
+```
+
+-   In general, we can observe a decreasing trend in the key statistics in the summary table from BILL_AMT1 to BILL_AMT6.
+
+### Exploration of history of past payment variable
+
+```{r, distribution-history-payment, warning = FALSE, message = FALSE}
+
+payamt_colsnames  <- paste0("PAY_AMT", c(1, 2:6))
+data2 <- data%>%select(starts_with("PAY_AMT"))
+
+# bar plot of history of past payment
+
+pay_colsnames  <- paste0("PAY_", c(1, 2:6))
+data3 <- data%>%select(pay_colsnames)
+plot <- lapply(1:ncol(data3), function(x) 
+  ggplot(data = data3, mapping = aes(x = data3[[x]])) + 
+  geom_bar(stat = "count",fill = "skyblue4") + theme_minimal() + 
+  xlab(paste0("Repayment status", sep=" ", pay_colsnames[x])) + xlim(-3,8))
+do.call(grid.arrange, c(plot, ncol=2, nrow=3))
+
+# number of defaulters in history of past payment
+
+par(mfrow = c(3,2))
+count4 <-  lapply(1:ncol(data3), function(x) table(data3[[x]], data$default)/rowSums(table(data3[[x]], data$default)))
+plots <- lapply(1:ncol(data3), function(x) barplot(count4[[x]][,2], ylim = c(0, 1), col = "skyblue4", main = paste0("Defaulters on", sep=" ", pay_colsnames[x])))
+```
+
+-   Having a delay, even for $1$ month in any of the previous months, increases the chance of default.
+
+## Task Solution: Are there any relevant transformations of one or more predictors that might improve the classification model?
+
+### Relevant transformations of predictors
+
+```{r, transformation, warning = FALSE, message = FALSE, fig.align='center', fig.height=3, fig.width=6}
+
+# log-transform of age 
+
+plot3 <- ggplot(data, aes(x = log(AGE)))+ 
+  geom_histogram(aes(x = log(AGE)), color ="blue", fill="skyblue4") + 
+  labs(x ="Age",y ="Counts") + theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Log Transform of Age")
+
+plot4 <- ggplot(data = data, mapping = aes(x = log(AGE))) + 
+  geom_density(fill="skyblue4") + theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Log Transform of Age") +
+  xlab("Age")
+
+grid.arrange(plot3, plot4, ncol = 2)
+
+# square-root transform of age 
+
+plot5 <- ggplot(data, aes(x = sqrt(AGE)))+ 
+  geom_histogram(aes(x = sqrt(AGE)), color ="blue", fill="skyblue4") + 
+  labs(x ="Age",y ="Counts") + theme(plot.title = element_text(hjust = 0.5)) +
+  ggtitle("Square Root Transform of Age")
+
+plot6 <- ggplot(data = data, mapping = aes(x = sqrt(AGE))) + 
+  geom_density(fill="skyblue4") + theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Square Root Transform of Age") +
+  xlab("Age")
+grid.arrange(plot5, plot6, ncol = 2)
+
+# square-root transform of limit balance  
+
+plot_bal3 <- ggplot(data, aes(x = sqrt(LIMIT_BAL)))+ 
+  geom_histogram(aes(x = sqrt(LIMIT_BAL)), color ="blue", fill="skyblue4") + 
+  labs(x ="LIMIT_BAL",y ="Counts") + theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Square Root of Limit_Bal")
+
+plot_bal4 <- ggplot(data = data, mapping = aes(x = sqrt(LIMIT_BAL))) + 
+  geom_density(fill="skyblue4") + theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("Square Root of Limit_Bal") +
+  xlab("LIMIT_BAL")
+
+grid.arrange(plot_bal3, plot_bal4, ncol = 2)
+```
+
+## Task Solution: Rename the column "default payment next month" as "default". Are there strong relationships between the default variable and other numeric variables? How can you handle the highly correlated variables?
+
+### Relationships between the default variable and other numeric variables
+
+-   Here we are checking the correlation of default variable with other numeric variables.
+
+```{r, correlation, warning = FALSE, message = FALSE}
+
+# correlation plot 
+
+payamt_colsnames <- paste0("PAY_", c(1, 2:6))
+data$default <- as.numeric(data$default)
+corrplot(cor(data %>%select(-EDUCATION,-SEX, -MARRIAGE,-ID, -payamt_colsnames)), method = "circle")
+```
+
+-   We see a high level of linear correlations between the amount of bill statements in different months.
+
+-   In the case of the multicollinearity, we need to use such techniques as Ridge and Lasso regression and the Principal components method.
+
+-   We can even drop some variables if we need to, but the price of this is unbiasedness of estimates and this is not the best decision.
+
+-   PCA - Principal Component Analysis
+
+```{r, pca, warning = FALSE, message = FALSE}
+
+# pca 
+
+pca.model <- prcomp(data %>%select(-EDUCATION,-SEX, -MARRIAGE,-ID, -payamt_colsnames), 
+                    center = TRUE, scale. = TRUE)
+summary(pca.model)
+```
+
+# Reference
