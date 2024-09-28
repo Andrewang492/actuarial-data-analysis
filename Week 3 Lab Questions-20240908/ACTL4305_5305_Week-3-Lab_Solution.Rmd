@@ -314,6 +314,7 @@ ConfuMatrix_lasso
 Think about which metric is suitable for this credit card default study. A bank will suffer a great loss if their clients default. Hence, we are more interested in how well the models predict the defaulter (class 1 not class 0), who is the minority class. In this case, people usually check Sensitivity, i.e., how many true defaulters are classified to be defaulters. Go and check which model has the highest Sensitivity using the code in the chunk above.
 
 my mse for lasso: `r mean((as.numeric(Data_test$default)-1 - prediction_lasso)^2)`
+
 ```{r MSE}
 mean((as.numeric(Data_test$default)-1 - prediction_lasso)^2)
 mean((as.numeric(Data_test$default)-1 - prediction_ridge)^2)
