@@ -1,0 +1,354 @@
+---
+title: "ACTL4305/5305 Actuarial Data Analytic Application"
+author: "Week 4: Proposed Solutions"
+date: "Model Selection and Assessment"
+output: 
+  bookdown::pdf_book:
+    keep_tex: false
+    number_sections: yes
+    toc: false
+biblio-style: apalike
+link-citations: yes
+colorlinks: true
+fontsize: 10pt
+fig_caption: yes
+linestretch: 1
+geometry: margin=2.3cm
+classoption: oneside
+graphics: yes
+fontfamily: mathpazo
+header-includes:
+  - \usepackage{float}
+  - \usepackage{booktabs}
+  - \usepackage{multicol}
+  - \floatplacement{figure}{H}
+  - \usepackage[table]{xcolor}
+  - \usepackage{amsmath}
+  - \usepackage{bm}
+  - \usepackage{mdframed}
+  - |
+    \newmdenv[
+      topline=true,
+      bottomline=true,
+      rightline=true,
+      leftline=true,
+      linewidth=1pt,
+      roundcorner=5pt,
+      backgroundcolor=white,
+      linecolor=black,
+      font=\normalfont
+    ]{taskbox}
+---
+
+```{r setup, message= FALSE, warning = FALSE,echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = FALSE, warning = FALSE, message = FALSE)
+library(dplyr)
+library(glmnet)#lasso linear regression
+library(Metrics)#RMSE
+```
+
+# Learning Objectives {.unnumbered}
+
+-   Understand how to build models for insurance premiums: a linear model without any penalty, a linear model with the Lasso penalty, and a generalized linear model with log link function.
+
+-   Compare the three models using various statistical techniques, including AIC and BIC, validation set, cross-validation, and bootstrap.
+
+# Introduction: Health Insurance Premium Modelling
+
+Assume you are a junior data analyst in a consulting company. One day, your supervisor sends you a data set about premiums collected from a health insurance company. This data set contains important information about policyholders, such as age, sex, body mass index (BMI), etc. Your job is to understand how this insurance company calculates premiums based on policyholders' characteristics.
+
+```{=tex}
+\begin{taskbox}
+\textbf{Questions for Lab 4:}
+
+- Use the code below to build a linear model without any penalty, a linear model with the Lasso penalty, and a generalized linear model with log link function. The code for model building is already provided.
+
+- Compare the three models based on AIC and BIC, validation set approach, cross-validation approach, and bootstrap approach.
+
+- Make a conclusion: which model is the best?
+\end{taskbox}
+```
+# Model Details
+
+## Linear Model
+
+\begin{align}\label{LM}
+E(y_i)= \beta x_i,
+\end{align} where $y_i$ is the premium of $i$-th observation, $x_i$ represents the vector of independent variables, and $\beta$ is the corresponding coefficient. The disadvantage of the linear model is that the predicted premiums may take negative values.
+
+## Linear Model with Lasso Penalty
+
+We need to add Lasso penalty to shrink $\beta$ in \eqref{LM}.
+
+## Generalized Linear Model with Log Link Function
+
+The advantage of the generalized linear model with a log link function is that the predicted premiums are always positive.
+
+```{=tex}
+\begin{align}\label{GLM}
+E(y_i)= \exp(\beta x_i),
+\end{align}
+```
+# Model Assessment Methods
+
+## AIC
+
+Akaike information criterion (`AIC`) is a model selection technique based on in-sample fit to estimate the likelihood of a model to predict the future values. The idea of `AIC` is to penalize the objective function if extra variables without strong predictive abilities are included in the model. A good model is the one that has minimum `AIC` among all the other models.
+
+```{=tex}
+\begin{align}\label{aic1}
+\text{AIC}&= -2 \times \ln (L) + 2 \times k, 
+\end{align}
+```
+where $L$ is the value of the likelihood, $N$ is the number of recorded measurements, and $k$ is the number of estimated parameters. The `AIC` statistic penalizes complex models less, meaning that it may put more emphasis on model performance on the training dataset, and, in turn, select more complex models. We can see that the penalty for `AIC` is less than for `BIC` in Equation \eqref{bic1}. This causes `AIC` to pick more complex models.
+
+## BIC
+
+Bayesian information criterion (`BIC`) is another criteria for model selection that measures the trade-off between model fit and complexity of the model. A lower `BIC` value indicates a better fit.
+
+```{=tex}
+\begin{align}\label{bic1}
+\text{BIC}&= -2 \times \ln (L) + \ln (N) \times k. 
+\end{align}
+```
+The `BIC` penalizes the model more for its complexity, meaning that more complex models will have a worse (larger) score and will, in turn, be less likely to be selected. `AIC` and `BIC` are both statistical approaches for estimating how well a given model fits a dataset and how complex the model is.
+
+Both `AIC` and `BIC` can not be calculated directly from the `glmnet` package. However, we can estimate them using Equations \eqref{bic1} and \eqref{aic1}. To be able to implement these formula in `R`, we make an assumption that the residual errors are normally distributed and this gives us Equations \eqref{norm1} and \eqref{norm2} for calculating `AIC` and `BIC`, respectively:
+
+```{=tex}
+\begin{align}
+\text{AIC}&= N \times \ln ({\hat{\sigma}^2}) + 2 \times k. \label{norm1}\\
+\text{BIC}&= N \times \ln ({\hat{\sigma}^2}) + \ln (N) \times k. \label{norm2}
+\end{align}
+```
+where ${\hat{\sigma}^2}$ is the variance estimate of the error associated with each response measurement. See more details at [proof](https://rstudio-pubs-static.s3.amazonaws.com/324771_0bd880964f064c53a70e757d5ef39669.html) and [reference](https://www.datacamp.com/community/tutorials/tutorial-ridge-lasso-elastic-net).
+
+## Validation Set Approach
+
+We want to estimate the test error associated with fitting a particular statistical learning method on a set of observations. The data set is randomly split into two sets, called the training set and the testing set or or hold-out set or validation set. The model is fitted using the training set only. Then the model is asked to predict the output values for the unseen data in the testing set. The validation set approach can be summarised in the following steps:
+
+-   Fit the model on the training set.
+
+-   Use the resulting fitted model to predict the responses for the observations in the validation set.
+
+-   The resulting validation set error rate is typically assessed using the mean square error ($\text{MSE}$) in the case of a quantitative response. The mean squared error is given by:
+
+```{=tex}
+\begin{align}\label{ney}
+\text{MSE} & = \frac{1}{N}\sum_{i}^{N} (y_{i}- \hat{y}_{i})^{2}, 
+\end{align}
+```
+where $y_{i}$ is the observed and $\hat{y}_{i}$ is the predicted values from the validation set.
+
+However, its evaluation can have a high variance. The evaluation may depend heavily on which data points end up in the training set and which end up in the test set, and thus the evaluation may be significantly different depending on how the division is made. Furthermore, only a subset of the observations are used to fit the model. In this tutorial, the training data set is randomly split in $70\%$ and $30\%$ ratios for model fitting and testing respectively.
+
+## Cross-validation (CV) Approach
+
+CV can be used to estimate the test error associated with a statistical learning method to evaluate its performance.
+
+-   This approach involves randomly dividing the set of observations into $k$ groups, or folds, of approximately equal size.
+
+-   The mean squared error, $\text{MSE}_{1}$, is then computed on the observations in the held-out fold using Equation \eqref{ney}.
+
+-   This procedure is repeated $k$ times. Each time, a different group of observations is treated as a validation set. This process results in $k$ estimates of the test error $\text{MSE}_{1}, \text{MSE}_{2},\ldots, \text{MSE}_{k}$.
+
+-   The $k$-fold cross-validation (CV) estimate is computed by averaging these values:
+
+```{=tex}
+\begin{align}\label{cv}
+\text{CV}_{k}&=\frac{1}{k}\sum_{i=1}^{k} \text{MSE}_{i}. 
+\end{align}
+```
+The advantage of this method is that it matters less how the data gets divided. Every data point gets to be in a test set exactly once and gets to be in a training set $k-1$ times. The variance of the resulting estimate increases as $k$ increase, but bias decreases.
+
+The disadvantage of this method is that the training algorithm has to be rerun from scratch $k$ times, which means it takes $k$ times as much computation to make an evaluation. A variant of this method is to randomly divide the data into a test and training set $k$ different times. The advantage of doing this is that you can independently choose how large each test set is and how many trials you average over.
+
+## Bootstrap Approach
+
+For each observation, we only keep track of predictions from bootstrap samples not containing that observation. The *leave-one-out bootstrap* estimation of prediction error is $$ \hat{\text{Err}}^{(1)}=\frac{1}{N}\sum_{i=1}^{N}\frac{1}{|C^{-i}|}\sum_{b \in C^{-i}}L(y_i, \hat f^{*b}(x_i)).$$ Here $C^{-i}$ is the set of indices of the bootstrap samples $b$ that do not contain observation $i$, and $|C^{-i}|$ is the number of such samples.
+
+In summary, the models are fit using the training data sets in Figure \ref{fig:sampling} and predict out-of-bag samples (test set).
+
+```{r, sampling, echo=FALSE,out.width="51%", out.height="36%",fig.cap = "Bootstrap Sampling",fig.show='hold',fig.align='center',out.extra = '', fig.pos= "!ht"}
+knitr::include_graphics("boot.pdf")
+```
+
+# Emperical Study
+
+We first load the data and build three target models.
+
+```{r}
+Data <- read.csv("insurance.csv")
+#Divide data into X and Y
+Data_X <- Data[,-7]
+Data_Y <- Data[,7]
+
+X_matrix <- model.matrix(~., Data_X) 
+Y_matrix <- as.matrix(Data_Y)
+
+#Linear model
+model_linear<- lm(charges~., data=Data)
+
+#Lasso-linear model
+set.seed(2023)
+CV_lasso<-cv.glmnet(X_matrix, Y_matrix, family="gaussian", 
+                     alpha = 1, nfolds = 10)
+model_lasso <- glmnet(X_matrix,  Y_matrix,  lambda = CV_lasso$lambda.min, alpha = 1)
+
+#Generalized linear model with log link
+model_loglinear<- glm(charges~., data=Data, family = gaussian(link="log") )
+```
+
+## AIC and BIC
+
+Note that we can directly use AIC() and BIC() functions to calculate AIC and BIC for the linear and generalized linear models. However, for the Lasso linear model, we need to calculate AIC and BIC manually. In this case, the generalized linear model has the lowest AIC and BIC, so it is the best model according to AIC and BIC.
+
+```{r}
+#N, the number of observation is 1338.
+
+# Linear model AIC/BIC
+AIC(model_linear) #27115.51
+BIC(model_linear) #27167.5
+#1338*log(sum((Data_Y-predict(model_linear))^2)/1338)+1338+1338*log(2*pi)+2*(9+1)#manual AIC
+#1338*log(sum((Data_Y-predict(model_linear))^2)/1338)+1338+1338*log(2*pi)+log(1338)*(9+1)#manual BIC
+
+# Lasson linear AIC/BIC
+1338*log(sum((Data_Y-predict(model_lasso,newx = X_matrix))^2)/1338) + 1338 +
+  1338*log(2*pi) + 2*(model_lasso$df+1)# 27111.59
+
+1338*log(sum((Data_Y-predict(model_lasso,newx = X_matrix))^2)/1338) + 1338 +
+  1338*log(2*pi) + log(1338)*(model_lasso$df+1) #27147.98
+
+#Generalized linear model AIC/BIC
+AIC(model_loglinear) #26929.37
+BIC(model_loglinear) #26981.36
+
+1338*log(sum((Data_Y-predict(model_loglinear,type="response"))^2)/1338)+1338+1338*log(2*pi)+2*(9+1)#manual AIC
+1338*log(sum((Data_Y-predict(model_loglinear,type="response"))^2)/1338)+1338+1338*log(2*pi)+log(1338)*(9+1)#manual BIC
+```
+
+## Validation Set Approach
+
+This is the same as the training-test method we learned in Week 2.
+
+```{r}
+set.seed(2023)
+# 70% of Data is used as the training set.
+index <- sample(1:nrow(Data), 0.7*nrow(Data))
+Train_Data <- Data[index,]
+Test_Data <- Data[-index,]
+
+Train_X_matrix <- model.matrix(~., Data[index,-7]) 
+Train_Y_matrix <- as.matrix(Data[index,7])
+Test_X_matrix <- model.matrix(~., Data[-index,-7]) 
+Test_Y_matrix <- as.matrix(Data[-index,7])
+```
+
+This time, the generalized linear model has the lowest validation error and it is the best model again!
+
+```{r}
+model_linear_train<- lm(charges~., data=Train_Data)
+pred_linear_test<-predict(model_linear_train,newdata =Test_Data )
+RMSE_linear_test<- sqrt(mean((pred_linear_test-Test_Data$charges)^2))#6132.626
+#rmse(Test_Data$charges,predict(model_linear_train,newdata=Test_Data))
+
+CV_lasso_train<-cv.glmnet(Train_X_matrix, Train_Y_matrix, family="gaussian", 
+                     alpha = 1, nfolds = 10)
+pred_lasso_test<-predict(CV_lasso_train,s=CV_lasso_train$lambda.min, newx=Test_X_matrix)
+RMSE_lasso_test<- sqrt(mean((pred_lasso_test-Test_Data$charges)^2))#6139.095
+
+model_loglinear_train<- glm(charges~., data=Train_Data, family = gaussian(link="log") )
+pred_loglinear_test<-predict(model_loglinear_train,newdata =Test_Data,type="response" )
+RMSE_loglinear_test<- sqrt(mean((pred_loglinear_test-Test_Data$charges)^2))#5754.545
+RMSE_linear_test
+RMSE_lasso_test
+RMSE_loglinear_test
+```
+
+## 5-fold Cross-Validation
+
+There are some existing packages that can help us do CV automatically, but we will not rely on those packages in this class. On the one hand, writing code by ourselves can help us understand the CV method throughly. On the other hand, you need to develop the skill of writing your own functions and packages. As you use more functions of others, you will see that some of them are hard to use.
+
+```{r}
+set.seed(2023)
+Nfold=5
+CV5_index<-split(sample(1:nrow(Data), replace = F), 1:Nfold)
+CV_RMSE <-data.frame(Linear=rep(0,Nfold), Lasso=0, Loglinear=0)
+
+for(i in c(1:Nfold)) {
+index_test<-CV5_index[[i]] #note this index is for the test set
+Train_Data <- Data[-index_test,]
+Test_Data <- Data[index_test,]
+
+Train_X_matrix <- model.matrix(~., Data[-index_test,-7]) 
+Train_Y_matrix <- as.matrix(Data[-index_test,7])
+Test_X_matrix <- model.matrix(~., Data[index_test,-7]) 
+Test_Y_matrix <- as.matrix(Data[index_test,7])
+
+model_linear_train<- lm(charges~., data=Train_Data)
+pred_linear_test<-predict(model_linear_train,newdata =Test_Data )
+CV_RMSE[i,1]<- sqrt(mean((pred_linear_test-Test_Data$charges)^2))
+
+CV_lasso_train<-cv.glmnet(Train_X_matrix, Train_Y_matrix, family="gaussian", 
+                     alpha = 1, nfolds = 10)
+pred_lasso_test<-predict(CV_lasso_train,s=CV_lasso_train$lambda.min, newx=Test_X_matrix)
+CV_RMSE[i,2]<- sqrt(mean((pred_lasso_test-Test_Data$charges)^2))
+
+model_loglinear_train<- glm(charges~., data=Train_Data, family = gaussian(link="log") )
+pred_loglinear_test<-predict(model_loglinear_train,newdata =Test_Data,type="response" )
+CV_RMSE[i,3]<- sqrt(mean((pred_loglinear_test-Test_Data$charges)^2))
+}
+CV_RMSE
+#Get CV-RMSE
+apply(CV_RMSE,2,mean) #the best model is log-linear model.
+```
+
+Check the 5-fold CV errors of the three models. The generalized linear model wins the third time, hat trick!
+
+## 10-time Bootstrap
+
+Again, we write the code for the 10-time Bootstrap by ourselves. Please note the difference between CV and bootstrap. Read the comments in the chunk below to help you understand.
+
+```{r}
+NBoot=10
+Boot_RMSE <-data.frame(Linear=rep(0,NBoot), Lasso=0, Loglinear=0)
+
+for(i in c(1:NBoot)) {
+set.seed(i) # we place set.seed() within the for-loop, and let it change by i,
+#this is to ensure a reproducible result and to sample different index for each loop.
+#You can try to move set.seed to the out of the for-loop and see what happens.
+  
+Bootindext<- sample(1:nrow(Data), replace = T) # "replace=TRUE" for bootstrap sampling
+
+index_test<-Bootindext #note this index is for the training set
+Train_Data <- Data[Bootindext,]
+Test_Data <- Data[-Bootindext,]
+
+Train_X_matrix <- model.matrix(~., Data[Bootindext,-7]) 
+Train_Y_matrix <- as.matrix(Data[Bootindext,7])
+Test_X_matrix <- model.matrix(~., Data[-Bootindext,-7]) 
+Test_Y_matrix <- as.matrix(Data[-Bootindext,7])
+
+model_linear_train<- lm(charges~., data=Train_Data)
+pred_linear_test<-predict(model_linear_train,newdata =Test_Data )
+Boot_RMSE[i,1]<- sqrt(mean((pred_linear_test-Test_Data$charges)^2))
+
+CV_lasso_train<-cv.glmnet(Train_X_matrix, Train_Y_matrix, family="gaussian", 
+                     alpha = 1, nfolds = 10)
+pred_lasso_test<-predict(CV_lasso_train,s=CV_lasso_train$lambda.min, newx=Test_X_matrix)
+Boot_RMSE[i,2]<- sqrt(mean((pred_lasso_test-Test_Data$charges)^2))
+
+model_loglinear_train<- glm(charges~., data=Train_Data, family = gaussian(link="log") )
+pred_loglinear_test<-predict(model_loglinear_train,newdata =Test_Data,type="response" )
+Boot_RMSE[i,3]<- sqrt(mean((pred_loglinear_test-Test_Data$charges)^2))
+}
+Boot_RMSE
+apply(Boot_RMSE,2,mean) #the best model is log-linear model.
+
+```
+
+Not surprisingly, the generalized linear model is the best again.
+
+# Conclusion
+
+This week, we learn how to compare different models using different approaches. More importantly, we develop our skills of programming. We find that the generalized linear model is very powerful compared to the other models. Next week, we will learn generalized linear models systematically.

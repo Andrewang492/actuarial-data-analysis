@@ -24,15 +24,16 @@ model_loglinear<- glm(charges~., data=Data, family = gaussian(link="log") )
 
 # can replace Log(L) with Sigma Hat.
 # Sigma Hat is found with RSS/n
+# https://robjhyndman.com/hyndsight/lm_aic.html
 
 insample <- function(model, testX) {
-  y_hat <- predict(model, testX) # use Data X for lm, use Dummy variable Matrix form for glms.
-  rss <- t(y_hat- Data_Y) %*% (y_hat - Data_Y)
-  variance <- var(y_hat) # unrelated...
-  df <- ncol(testX) - 1 + 1 # 9-1 betas, +1 variance.
-  AIC <- nrow(testX) * log(rss) + 2 * df 
-  BIC <- nrow(testX) * log(rss) + log(nrow(testX)) * df 
-  return(matrix(data=c("AIC", "BIC", "RSS", AIC, BIC, rss), nrow=2, ncol=3, byrow=TRUE))
+  y_hat <- predict(model, newx=testX, type="response") # use Data X for lm, use Dummy variable Matrix form for glms. Why use resposne???
+  mse <- (t(y_hat- Data_Y) %*% (y_hat - Data_Y))/nrow(testX)
+  # variance <- var(y_hat) # unrelated...
+  df <- ncol(testX) +1   # how to find?
+  AIC <- nrow(testX) * (log(2*pi)+log(mse)+1) + 2 * df 
+  BIC <- nrow(testX) * (log(2*pi)+log(mse)+1) + log(nrow(testX)) * df 
+  return(matrix(data=c("AIC", "BIC", "MSE", AIC, BIC, mse), nrow=2, ncol=3, byrow=TRUE))
 }
 
 insample(model_linear, Data_X)
@@ -40,6 +41,7 @@ insample(model_lasso, X_matrix)
 insample(model_loglinear, Data_X)
 
 #----Testing validation set (VS) ----
+set.seed(2023)
 train_indices <- sample(nrow(X_matrix), 0.7*nrow(X_matrix))
 train_X <- X_matrix[train_indices,]
 train_Y <- Y_matrix[train_indices,]
@@ -53,13 +55,13 @@ model_lasso_VS <- glmnet(train_X, train_Y, lambda = CV_lasso_VS$lambda.min, alph
 model_loglinear_VS <- glm(charges~. , data=Data[train_indices, ], family=gaussian(link="log"))
 
 VS_test <- function(model, testX, testY) {
-  y_hat <- predict(model, testX)
+  y_hat <- predict(model, testX, type="response") # MUST HAVE RESPONSE!!!!
   rss <- t(y_hat- testY) %*% (y_hat - testY)
   return(rss/nrow(testX))
 }
-VS_test(model_linear_VS, Data_X[-train_indices,], Data_Y[-train_indices])
-VS_test(model_lasso_VS, test_X, test_Y)
-VS_test(model_loglinear_VS, Data_X[-train_indices,], Data_Y[-train_indices]) #extremely large
+sqrt(VS_test(model_linear_VS, Data_X[-train_indices,], Data_Y[-train_indices]))
+sqrt(VS_test(model_lasso_VS, test_X, test_Y))
+sqrt(VS_test(model_loglinear_VS, Data_X[-train_indices,], Data_Y[-train_indices]))
 
 #---- CV ----
 #Randomly shuffle the data
@@ -104,12 +106,12 @@ for(i in 1:10){
   cverr_loglin <- c(cverr_loglin, c(loglin_err))
 }
 
-print(mean(cverr_lin))
-print(mean(cverr_lasso))
-print(mean(cverr_loglin))
+print(sqrt(mean(cverr_lin)))
+print(sqrt(mean(cverr_lasso)))
+print(sqrt(mean(cverr_loglin)))
 
 # ---- bootstrap ----
-train_indices <- sample(nrow(X_matrix), 0.7*nrow(X_matrix), replace = TRUE)
+train_indices <- sample(nrow(X_matrix), nrow(X_matrix), replace = TRUE)
 train_X <- X_matrix[train_indices,]
 train_Y <- Y_matrix[train_indices,]
 test_X <- X_matrix[-train_indices,]
@@ -121,11 +123,6 @@ CV_lasso_VS<-cv.glmnet(train_X, train_Y, family="gaussian",
 model_lasso_VS <- glmnet(train_X, train_Y, lambda = CV_lasso_VS$lambda.min, alpha=1)
 model_loglinear_VS <- glm(charges~. , data=Data[train_indices, ], family=gaussian(link="log"))
 
-VS_test <- function(model, testX, testY) {
-  y_hat <- predict(model, testX)
-  rss <- t(y_hat- testY) %*% (y_hat - testY)
-  return(rss/nrow(testX))
-}
-VS_test(model_linear_VS, Data_X[-train_indices,], Data_Y[-train_indices])
-VS_test(model_lasso_VS, test_X, test_Y)
-VS_test(model_loglinear_VS, Data_X[-train_indices,], Data_Y[-train_indices])
+sqrt(VS_test(model_linear_VS, Data_X[-train_indices,], Data_Y[-train_indices]))
+sqrt(VS_test(model_lasso_VS, test_X, test_Y))
+sqrt(VS_test(model_loglinear_VS, Data_X[-train_indices,], Data_Y[-train_indices]))
