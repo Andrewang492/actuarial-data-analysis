@@ -1,0 +1,1031 @@
+---
+title: "ACTL4305/5305 Actuarial Data Analytic Application"
+author: "Week 5: Proposed Solutions"
+date: "GLM"
+output: 
+  bookdown::pdf_book:
+    keep_tex: false
+    number_sections: yes
+    toc: false
+bibliography: [reference.bib]
+biblio-style: apalike
+link-citations: yes
+colorlinks: true
+fontsize: 10pt
+fig_caption: yes
+linestretch: 1
+geometry: margin=2.3cm
+classoption: oneside
+graphics: yes
+fontfamily: mathpazo
+header-includes:
+  - \usepackage{float}
+  - \usepackage{booktabs}
+  - \usepackage{multicol}
+  - \floatplacement{figure}{H}
+  - \usepackage[table]{xcolor}
+  - \usepackage{amsmath}
+  - \usepackage{bm}
+  - \usepackage{mdframed}
+  - |
+    \newmdenv[
+      topline=true,
+      bottomline=true,
+      rightline=true,
+      leftline=true,
+      linewidth=1pt,
+      roundcorner=5pt,
+      backgroundcolor=white,
+      linecolor=black,
+      font=\normalfont
+    ]{taskbox}
+---
+
+# Learning Objectives {.unnumbered}
+
+-   Perform data analytics modelling using GLM for response variables of aggregate claims, and claims frequency and severity.
+
+-   Understand the specifications of the GLM and the model assumptions. Know how to set offsets and adjust weights when building GLMs.
+
+-   Select and validate a GLM appropriately. Try different distributions and compare their fitting and predictive performance.
+
+# Frequency-Severity Analysis
+
+Many insurance data sets feature information about how often claims arise, the frequency, in addition to the claim size, the severity. Observable responses can include:
+
+-   $N$, the the number of claims (Claim Count),
+
+-   $y_k, k = 1, ..., N$, the amount of each claim (Loss), and
+
+-   $S = y_1 + ... + y_N$, the aggregate claim amount (Aggregate Loss).
+
+-   $E$, for exposure.
+
+By convention, the set $\{y_j\}$ is empty when $N = 0$.
+
+For modeling the joint outcome $(N, S)$ (or equivalently,$(N, \bar{S})$), it is customary to first condition on the frequency and then modeling the severity. Suppressing the $\{i\}$ subscript, we decompose the distribution (per unit Exposure) of the dependent variables as:
+
+```{=tex}
+\begin{equation} 
+\begin{split}
+f(N,S) &= f(N) \times f(S|N)\\
+\text{joint} &= \text{frequency} \times \text{conditional severity},
+\end{split}
+(\#eq:f-q)
+\end{equation}
+```
+where $f(N, S)$ denotes the joint distribution of $(N, S)$.
+
+Here is a summary:
+
+-   Frequency = Claim Count / Exposure
+
+-   Severity = Aggregate Loss / Claim Count
+
+-   Pure Premium = Aggregate Loss / Exposure = Frequency $\times$ Severity
+
+# Data Import and Preparation
+
+In this week's lab, we use the same French insurance datasets, `freMTPL2freq` and `freMTPL2sev`, as used in the earlier weeks. Following @wuthrich2023statistical, the code below performs some data cleaning and merges `freMTPL2freq` with the aggregated severities for each insurance policy in `freMTPL2sev`. It is interesting to note that this process does not retain the claim count information from `freMTPL2freq`; instead, it extracts this information from `freMTPL2sev`.
+
+```{r echo=TRUE, results='hide', message=FALSE, warning=FALSE}
+#Load the required packages
+library(CASdatasets)
+library(tidyverse)
+library(MASS) #stepAIC and glm.nb()
+library(statmod)
+library(MLmetrics)
+```
+
+```{r echo=TRUE}
+# Load datasets
+data(freMTPL2freq)
+data(freMTPL2sev)
+
+#Data pre-processing
+freq_data <- freMTPL2freq[, -2] # Remove the column of ClaimNb from the frequency data
+freq_data$VehGas <- factor(freq_data$VehGas)
+sev_data <- freMTPL2sev
+sev_data$ClaimNb <- 1
+agg_sev <- aggregate(sev_data, by=list(IDpol=sev_data$IDpol), FUN = sum)[c(1,3:4)]
+names(agg_sev)[2] <- "ClaimTotal"
+merged_data <- merge(x=freq_data, y=agg_sev, by="IDpol", all.x=TRUE)
+merged_data[is.na(merged_data)] <- 0
+merged_data <- merged_data[merged_data$ClaimNb <= 5, ]
+merged_data$Exposure <- pmin(merged_data$Exposure, 1)
+
+freMTPL2full <- merged_data
+```
+
+## Task Solution: As pointed out in @wuthrich2023statistical, "the claim counts on the insurance policies with policy IDs $\leq$ 24500 in `freMTPL2freq` do not seem to be correct because these claims do not have claim severity counterparts in `freMTPL2sev`. For this reason, we work with the claim counts extracted from the latter file." Could you verify if this claim is possibly true? Also, what data cleaning steps are done in the code above?
+
+To verify whether the claim about policy IDs $\leq$ 24500 is possibly true, you can check if there are policies with claim counts in `freMTPL2freq` that do not have corresponding entries in `freMTPL2sev`. If a significant number of such policies exist, this would support the assertion made by @wuthrich2023statistical. This can be done by comparing the policy IDs in both datasets and checking for discrepancies, as shown in the code below.
+
+```{r echo=TRUE}
+# Count duplicates in freMTPL2sev
+num_duplicate_ids_sev <- freMTPL2sev %>%
+  count(IDpol) %>%
+  filter(n > 1) %>%
+  nrow()
+
+cat("Number of unique duplicated IDpol in freMTPL2sev:", num_duplicate_ids_sev, "\n")
+
+# Count duplicates in freMTPL2freq
+num_duplicate_ids_freq <- freMTPL2freq %>%
+  count(IDpol) %>%
+  filter(n > 1) %>%
+  nrow()
+
+cat("Number of unique duplicated IDpol in freMTPL2freq:", num_duplicate_ids_freq, "\n")
+
+# IDs with ClaimNb > 0 in freMTPL2freq
+ids_claim_nb_gt_zero <- freMTPL2freq %>%
+  filter(ClaimNb > 0) %>%
+  pull(IDpol) %>%
+  unique()
+
+# Unique IDs in freMTPL2sev
+unique_ids_sev <- freMTPL2sev %>%
+  pull(IDpol) %>%
+  unique()
+
+# IDs not in freMTPL2sev
+ids_not_in_sev <- setdiff(ids_claim_nb_gt_zero, unique_ids_sev)
+num_ids_not_in_sev <- length(ids_not_in_sev)
+
+cat("Number of unique IDs with ClaimNb > 0 in freMTPL2freq but not in freMTPL2sev:", 
+    num_ids_not_in_sev, "\n")
+```
+
+From the above results, we can infer that each row in `freMTPL2freq` represents a unique policy, while each row in `freMTPL2sev` represents an individual claim. Therefore, we need to aggregate the claim amount information from `freMTPL2sev`. There are `r length(ids_not_in_sev)` unique IDs with `ClaimNb > 0` in `freMTPL2freq` but not in `freMTPL2sev`, which would strongly support the assertion made by @wuthrich2023statistical.
+
+Recalling from Week 2's lab, most of the following data cleaning steps were discussed in our EDA:
+
+-   `freq_data$VehGas <- factor(freq_data$VehGas)`: This line converts the `VehGas` column in the `freq_data` data frame from a character type to a factor.
+
+-   `merged_data[is.na(merged_data)] <- 0`: This replaces any `NA` values in the `merged_data` data frame with 0. This is done to handle missing data, treating them as zero claims or zero claim amounts during data aggregation.
+
+-   `merged_data <- merged_data[merged_data$ClaimNb <= 5, ]`: This line filters the `merged_data` data frame to include only policies with five or fewer claims. Policies with more than five claims are excluded from the data frame.
+
+-   `merged_data$Exposure <- pmin(merged_data$Exposure, 1)`: The `Exposure` column in the `merged_data` data frame is modified such that any value greater than 1 is capped at 1.
+
+## Data Splitting
+
+We split the dataset `freMTPL2full` into training and test sets, with 70% allocated to the training set. The selected indices are stored in `train_indices`, which are used to subset the dataset into training and test sets, as shown in the commented-out lines where `train_data` and `test_data` are created. Note that in this week's lab, we primarily use `train_indices` to select the training or test sets as needed.
+
+```{r echo=TRUE}
+#Split the Data
+set.seed(903)  
+train_indices <- sample(1:nrow(freMTPL2full), size = 0.7 * nrow(freMTPL2full))  
+
+#train_data <- freMTPL2full[train_indices, ]
+#test_data <- freMTPL2full[-train_indices, ]
+```
+
+# Modeling Claim Frequency Using GLMs
+
+It has become routine for actuarial analysts to model the frequency based on covariates $x_i$ using generalized linear models, GLMs. For count outcomes, one begins with a **Poisson** or **negative binomial** distribution. Moreover, to handle the excessive number of zeros relative to that implied by these distributions, analysts routinely examine zero-inflated.
+
+A strength of GLMs relative to other non-linear models is that one can express the mean as a simple function of linear combinations of the covariates. In insurance, it is common to use a "logarithmic link" for this function and so express the mean as $\mu_i = \text{E} Ni = \text{exp}(x'_i \beta)$, where $\beta$ is a vector of parameters associated with the covariates. This function is used because it yields desirable parameter interpretations, seems to fit data reasonably well, and ties well with other approaches traditionally used in actuarial ratemaking applications.
+
+Our objective is to build GLMs to predict the frequency using related risk factors, select the most promising GLM, interpret the results and quantify its predictive accuracy.
+
+**Remark (Interaction terms)**: Two predictors are said to interact if the effect that one of them has on the mean response depends on the value of the other. The product term $x_1 \times x_2$ models an interaction between $x_1$ and $x_2$. Except in special circumstances, a model including a product term for interaction between two predictors should also include terms with each of the predictors.
+
+**Remark (Basis Expansions)**: Similar to linear models, we could also extend the features using basis functions, such as polynomial, splines, etc. The basis function model becomes $$ g(\mu)=\beta_0+h(x_1)\beta_1+\cdots+h(x_p)\beta_p.$$ 
+Additionally, recall that **Generalized Additive Models (GAMs)** were introduced in the "Moving Beyond Linearity" section of the prerequisite course. Feel free to explore them further on your own!
+
+**Remark (Shrinkage Techniques)**: Recall the shrinkage techniques we discussed in Week 3. Using the `glmnet` package, we can do GLM with shrinkage techniques.
+
+## Poisson GLM for Claim Frequencies
+
+### Task Solution: Fit a Poisson GLM (Full Model) Using All Available Training Data Except `IDpol`. Model the Number of Claims per Policy as the Target Variable and Include an Offset for Exposure Volume.
+
+```{r echo=TRUE}
+# Poisson GLM (full model) using training data
+freqPoisson_full <- glm(ClaimNb ~ VehPower + VehAge + DrivAge + BonusMalus + 
+                          VehBrand + VehGas + Density + Region + Area,  
+                        data = freMTPL2full, subset = train_indices,
+                        offset = log(Exposure), family = poisson(link = "log"))
+
+summary(freqPoisson_full)
+```
+
+### What are Weights and Offsets?
+
+To understand the need for weights and offsets in GLMs, consider the following excerpts from Sections 2.5 and 2.6 of [Generalized Linear Models for Insurance Rating](https://www.casact.org/sites/default/files/2021-01/05-Goldburd-Khare-Tevet.pdf), targeted at actuaries in the property/casualty insurance industry:
+
+**For Weights:**
+
+> Frequently, the dataset going into a GLM will include rows that represent the averages of the outcomes of groups of similar risks rather than the outcomes of individual risks. For example, in a claim severity dataset, one row might represent the average loss amount for several claims, all with the same values for all the predictor variables. Or, perhaps, a row in a pure premium dataset might represent the average pure premium for several exposures with the same characteristics (perhaps belonging to the same insured).
+
+> In such instances, it is intuitive that rows that represent a greater number of risks should carry more weight in the estimation of the model coefficients, as their outcome values are based on more data. GLMs accommodate that by allowing the user to include a weight variable, which specifies the weight given to each record in the estimation process.
+
+**For (Exposure) Offsets**:
+
+> Offsets are also used when modeling a target variable that is expected to vary directly with time on risk or some other measure of exposure. An example would be where the target variable is the number of claims per policy for an auto book of business where the term lengths of the policies vary; all else equal, a policy covering two car years is expected to have twice the claims as a one-year policy. This expectation can be reflected in a log-link GLM by including the (logged) number of exposures - car years in this example - as an offset.
+
+> Note that this approach is distinct from modeling claims frequency, i.e., where the target variable is the number of claims divided by the number of exposures, which is the more common practice. In a frequency model, the number of exposures should be included as a weight, but not as an offset. In fact: a claim count model that includes exposure as an offset is exactly equivalent to a frequency model that includes exposure as a weight (but not as an offset) - that is, they will yield the same predictions, relativity factors and standard errors.
+
+In general, weights can be identically one or can be inputs into the GLM. In insurance applications, the number of claims or exposures are often used as measures for these weights. Suppose your data contains the number of exposures, you might be curious whether the number of exposures should be introduced into the GLM as weights or offsets. Interestingly, a claim count model that includes exposure as an offset (i.e., where the response is the claim number) is exactly equivalent to a frequency model that includes exposure as a weight (but not as an offset; i.e., where the response is the claim frequency) when the claim distribution is a Poisson or overdispersed Poisson distribution. Please read the following paragraph extracted from [Generalized Linear Models for Insurance Rating](https://www.casact.org/sites/default/files/2021-01/05-Goldburd-Khare-Tevet.pdf) to understand the difference between weight and offset, and you are also encouraged to read the relevant sections of the book for a deeper understanding:
+
+> To gain an intuition for this relationship, recall that an offset is an adjustment to the mean, while the weight is an adjustment to the variance. For a claim count model, additional exposures on a record carry the expectation of a greater number of claims, and so an offset is required. While the variance of the claim count is also expected to increase with increasing exposure---due to the exponential family's inherent expectation of greater mean implying greater variance-this is naturally handled by the GLM's assumed mean/variance relationship, and so no adjustment to variance (i.e., no weight variable) is necessary. For a claim frequency model, on the other hand, additional exposure carries the expectation of reduced variance (due to the larger volume of exposures yielding greater stability in the average frequency), but no change to the expected mean, and therefore a weight - but no offset - is needed.
+
+The equivalence of the two models can be verified by the following code:
+
+```{r echo=TRUE, eval=FALSE}
+#freqPoisson_full is equivalent to: 
+freqPoisson_fullalt <- glm(ClaimNb/Exposure ~ VehPower + VehAge + DrivAge + BonusMalus + 
+                          VehBrand + VehGas + Density + Region + Area,  
+                        data = freMTPL2full, subset = train_indices,
+                        weights = Exposure, family = poisson(link = "log"))
+summary(freqPoisson_fullalt)
+```
+
+Note that the AIC is reported as `NA` here because AIC is based on the log-likelihood, and Poisson GLMs expect the response variable to be integer counts. When you divide by `Exposure`, the response becomes fractional, resulting in invalid likelihood values.
+
+## Model Interpretation
+
+### Task Solution: Interpret the GLM Coefficients. Refit the Full Model by Moving `Density` as the Last Predictor, and Compute an Analysis of Deviance Table for the New Generalized Linear Model Fit.
+
+Let's focus on the summary from the Poisson model (full model) as example:
+
+-   The coefficient of `DrivAge` is 0.005322. When the driver's age increases by 1, the log of expected value of frequency $\mu$ will increase by 0.005322. So $\mu$ will increase by $exp(0.005322)-1 = 0.534\%$.
+
+-   We have one categorical variable called `Area`, which can take `A`, `B`, `C`, `D`, `E` or `F`. We deal with this categorical variable by [dummy coding](https://stats.idre.ucla.edu/spss/faq/coding-systems-for-categorical-variables-in-regression-analysis-2/#DUMMYCODING). Notice we treat `A` as the 0 level, that's why we only have the cofficients for the other five areas (`AreaB`, `AreaC`, `AreaD`, `AreaE`, `AreaF`). For example, the coefficient of `AreaB` is 0.1044. It means if the `Area` is `B`, the $log(\mu)$ will be 0.1044 greater than that of `AreaA`. Or in another words, $\mu$ will increase by $exp(0.1044)-1=11.004\%$.
+
+-   `z value` is the test-statistic for the Wald-test (see Section 5.8 on page 75, Generalized Linear model for Insurance Data) that the parameter is 0. The coefficients of most of the variables are not significantly different from 0 at 99.9% according `Pr(>|z|)`.
+
+Why do we want an `ANOVA` table when I can just get Wald-test of my variables with standard output (`summary(glm)`)? If you have a categorical/factor variable with more than two levels, the summary output is hard to interpret. It will give you tests of individual levels against the reference level, but won't give you a test of the factor as a whole.
+
+Following the task instructions, let's refit the full model by moving `Density` as the last predictor:
+
+```{r}
+freqPoisson_anova <- glm(ClaimNb ~ VehPower + VehAge + DrivAge + BonusMalus + 
+                           VehBrand + VehGas + Region + Area +  Density,  
+                         data = freMTPL2full, subset = train_indices,
+                         offset = log(Exposure), family = poisson(link = "log"))
+```
+
+Double check the summary of `summary(freqPoisson_anova)` and `summary(freqPoisson_full)`, you can find they are the same.
+
+The ANOVA table will optionally contain test statistics (and P values) comparing the reduction in deviance for the row to the residuals. For models with known dispersion (e.g., binomial and Poisson fits) the chi-squared test is most appropriate, and for those with dispersion estimated by moments (e.g., gaussian, quasibinomial and quasipoisson fits) the F test is most appropriate. (<https://www.rdocumentation.org/packages/stats/versions/3.6.2/topics/anova.glm>)
+
+```{r,anova}
+anova(freqPoisson_anova,test="Chisq")
+
+#anova(freqPoisson_full,test="Chisq")
+```
+
+-   From the ANOVA table, we can see the test of the factor `Area` as a whole. It suggests this factor is important to the model in explaining the response variable.
+
+-   In the ANOVA table, we can also observe the `Deviance` column. It measures reductions in the residual deviance if we include additional predictors into the model compared to the previous model. For example, if we do not include any predictor, the residual deviance is 120058. Then we include `VehPower`, so the residual deviance drops from 120058 to 120027, indicating the feature importance of `VehPower`.
+
+-   **Question:** How to compare two nested models and test which one is better? Assume Model 1 has $q$ parameters with deviance $D_1$ and Model 2 has $p$ parameters with deviance $D_2$. $p>q$. (refer to lecture notes in week 5)
+
+You could use the ANOVA table to compare two nested models by computing the Chi-squared test statistics ($D_1-D_2$). Following the rule of thumb mentioned in the GLM video lecture, Model 2 is preferred if $D_1-D_2>2(p-q)$.
+
+You could also use `glm1` and `glm2` to fit two models, and then use `anova(glm1,glm2,test="Chisq")` to compare the two nested models. If more than one object is specified, the table has a row for the residual degrees of freedom and deviance for each model. For all but the first model, the change in degrees of freedom and deviance is also given. (This only makes statistical sense if the models are nested.) It is conventional to list the models from smallest to largest, but this is up to the user. Please try it yourself.
+
+## Choosing the Distribution
+
+### Task: Fit a Quasi-Poisson GLM (Full Model) Using All Available Training Data Except `IDpol`. Compare the Summary Output with the Corresponding Poisson GLM. Perform Diagnostic Checks on Both Models.
+
+```{r echo=TRUE}
+freqQuasipoisson_full <- glm(ClaimNb ~ VehPower + VehAge + DrivAge + BonusMalus + 
+                          VehBrand + VehGas + Density + Region + Area,  
+                        data = freMTPL2full, 
+                        subset = train_indices,
+                        offset = log(Exposure), 
+                        family = quasipoisson(link = "log"))
+
+summary(freqQuasipoisson_full)
+```
+
+You can see the coefficients from two models are totally the same but the standard errors of Quasi-Poisson is larger than those of Poisson. For Poisson model, the assumed relationship is that the variance equals the expected value. For Quasi-Poisson model, the variance is assumed to be a linear function of the mean. The dispersion parameter, which was forced to be 1 in Poisson model, is allowed to be estimated in Quasi-Poisson model. In fact, it is estimated at 1.715289. This parameter tells us how many times the variance is larger than the mean. Since our dispersion was larger than one, it turns out the conditional variance is actually larger than the conditional mean. We have over-dispersion in this case (under-dispersion if it is less than 1).
+
+**Randomized Quantile Residuals (RQR) v.s. Fitted Values (FV)**
+
+```{r,sdrfv,fig.cap="RQR vs FV, Poisson and Quasipoisson", fig.align='center', fig.height=3, fig.width=6}
+# Sample 50,000 indices to use in the plots for faster generation
+set.seed(809)
+sample_indices <- sample(1:length(train_indices), 50000)
+
+par(mfrow=c(1,2))
+
+set.seed(309)
+plot(freqPoisson_full$fitted.values[sample_indices],qresiduals(freqPoisson_full)[sample_indices],
+     xlab="Fitted values",ylab="Randomized Quantile Residuals",
+     main="RQR vs FV, Poisson",
+     cex.main=0.8, cex.lab=0.8, cex.axis=0.7)
+abline(h=0,col="red",lty=2)
+
+plot(freqQuasipoisson_full$fitted.values[sample_indices],
+qres.pois(freqQuasipoisson_full)[sample_indices], 
+# use qres.pois directly as qresiduals can't automatically select distribution for quasipoisson
+     xlab="Fitted values",ylab="Randomized Quantile Residuals",
+     main="RQR vs FV, Quasipoisson",
+     cex.main=0.8, cex.lab=0.8, cex.axis=0.7)
+abline(h=0,col="red",lty=2)
+```
+
+For discrete distributions like Poisson or negative binomial, or distributions with a point mass such as Tweedie, deviance residuals often do not follow a normal distribution. This is because they account for the distribution's shape but not its discreteness, leading to clusters of residuals around common target values. As a result, deviance residuals are less effective for assessing the fit of these models. A potential solution is using **randomized quantile residuals**, which add random jitter to spread the discrete points more smoothly across the distribution [@goldburd2016generalized].
+
+Ideally, in Figure \@ref(fig:sdrfv), we want to see the randomized quantile residuals follow no predictable pattern and be normally distributed. However, the spread of residuals decreases as the fitted values increase.
+
+**QQ plot of randomized quantile residuals**
+
+The QQ plot, or quantile-quantile plot, is a graphical tool to help us assess if a set of data plausibly came from some theoretical distribution such as a Normal or exponential. If both sets of quantiles came from the same distribution, we should see the points forming a line that's roughly straight.
+
+Deviance residuals are approximately normally distributed for most response distributions. We can use QQ plot of the randomized quantile residuals as a diagnostic tool.
+
+```{r, fig.align='center', fig.height=3, fig.width=6}
+par(mfrow=c(1,2))
+
+set.seed(409)
+
+qqnorm(qresiduals(freqPoisson_full)[sample_indices],main="QQ plot Poisson", 
+       cex.main=0.8, cex.lab=0.8, cex.axis=0.7)
+qqline(qresiduals(freqPoisson_full)[sample_indices],col="red")
+
+qqnorm(qres.pois(freqQuasipoisson_full)[sample_indices],main="QQ plot Quasipoisson",
+       cex.main=0.8, cex.lab=0.8, cex.axis=0.7)
+qqline(qres.pois(freqQuasipoisson_full)[sample_indices],col="red")
+```
+
+-   It looks generally good. The sample quantiles only deviate from the theoretical quantiles in the upper tail.
+
+### Task: Fit a Negative Binomial GLM (Full Model) Using All Available Training Data Except `IDpol`. Perform Diagnostic Checks and Comment on the Results.
+
+```{r echo=TRUE}
+freqNb_full<-glm.nb(ClaimNb ~ offset(Exposure) + VehPower + VehAge + DrivAge + BonusMalus + 
+                               VehBrand + VehGas + Density + Region + Area,
+                             data= freMTPL2full,
+                             subset = train_indices)
+
+summary(freqNb_full)
+```
+
+**Randomized quantile residuals v.s. Fitted Values**
+
+```{r, fig.align='center', fig.height=3, fig.width=4.5}
+set.seed(742)
+plot(freqNb_full$fitted.values[sample_indices],qresiduals(freqNb_full)[sample_indices],
+     xlab="Fitted values",ylab="Randomized Quantile Residuals",
+     main="RQR vs FV, Negative Binomial")
+abline(h=0,col="red",lty=2)
+```
+
+**QQ plot of randomized quantile residuals**
+
+```{r, fig.align='center', fig.height=3, fig.width=4.5}
+qqnorm(qresiduals(freqNb_full)[sample_indices])
+qqline(qresiduals(freqNb_full)[sample_indices],col="red")
+```
+
+### Other Distributions (Not Examinable): Zero-inflated models
+
+Insurance claim data often have an excessive number of zeros. The advantage of zero-inflated models is that they are good at handling a mass at zero, which means no claims. A binary model (usually logit or probit) is used to model the zero-inflation part (non claim / claims) of the data. You are encouraged to explore this yourself.
+
+-   Hint: You can use the `zeroinfl` function from the `pscl` package to implement zero-inflated regression. It allows the use of an `offset`, similar to how we used it previously in the `glm` function.
+
+## Feature Selection
+
+### Forward and Backward AIC/BIC Selections
+
+Regression requires you to add variables into your model and you test each one to see whether it is significantly different than zero. Stepwise regression allows you to do it by following ways.
+
+-   Forward: Start with a simple model and automatically add variables to it.
+
+-   Backward: Start with a complex model and automatically remove variables from it.
+
+-   Both: Iteratively add or remove variables each step.
+
+To learn this part of knowledge, you can read Chapter 6 Section 6.1.2 of *An Introduction to Statistical Learning* and Week 3 Lecture Slides (filter, *wrapper*, embedded). The `MASS` package offers the `stepAIC` function and it is a wrapper method.
+
+```{r echo=TRUE, eval=FALSE}
+glm.full<-glm(ClaimNb ~ offset(log(Exposure)) + VehPower + VehAge + DrivAge + BonusMalus +
+                VehBrand + VehGas + Density + Region + Area,
+              data = freMTPL2full, subset = train_indices, family = poisson(link = "log"))
+
+glm.none <- glm(ClaimNb ~ offset(log(Exposure)) + 1,
+                data = freMTPL2full, subset = train_indices, family = poisson(link = "log"))
+
+# AIC backward
+aic_back<-stepAIC(glm.full,
+                  direction = "backward",
+                  k = 2, # set k = 2 for AIC; k = log(n) for BIC
+                  scope = list(upper = glm.full, lower = glm.none)
+)
+
+freqPoisson_step <- glm(ClaimNb ~ VehPower + VehAge + DrivAge + BonusMalus + 
+                          VehBrand + VehGas + Region + Area,  
+                        data = freMTPL2full, subset = train_indices,
+                        offset = log(Exposure), family = poisson(link = "log"))
+summary(freqPoisson_step)
+```
+
+We performed backward stepwise selection using AIC, which only removed `Density` compared to the full model.
+
+```{=tex}
+\begin{taskbox}
+\textbf{Exercise:}
+
+1. Run the code above in the R Markdown file. Make sure you understand the intermediate outputs of the stepwise selection process.
+
+2. So far, we've only used backward stepwise selection with AIC. Now, explore other stepwise selection methods (e.g., forward stepwise selection) or use a different criterion (e.g., BIC). Do these approaches result in a different set of predictors being selected?
+\end{taskbox}
+```
+
+### Regularization Methods (from Week 3)
+
+Alternatively, we can fit Poisson lasso or ridge regression. We leave these methods as an exercise for you to explore further.
+
+## Transformation of Variables
+
+### An Example of Transformation of `Age`
+
+GLMs assume a linear relationship between the transformed predictor variables (after applying a link function) and the expected outcome. However, the relationship between predictors and the response variable may not always be linear. Applying transformations (e.g., logarithms, polynomials, or splines) can help capture more complex non-linear relationships. In many cases, the variable needs to be transformed to ensure that the resulting model provides a better fit to the data. In this subsection, we will explore some possible transformations of `age`, as previewed in our EDA during Week 2's lab.
+
+Here, we consider two transformations as discussed in @schelldorfer2019nesting. First, we add polynomial terms to the predictor `DrivAge` by including the log transformation and powers of `DrivAge` up to the fourth degree. Second, we apply a binning technique to the continuous `DrivAge` variable. We divide `DrivAge` into age brackets (e.g., "18-20", "21-25", etc.), treating these age ranges as categorical levels.
+
+```{r echo=TRUE, eval=FALSE}
+#Adding Polynomial Terms
+freqPoisson_age1 <- glm(ClaimNb ~ VehPower + VehAge + BonusMalus + 
+                          VehBrand + VehGas + Density + Region + Area +
+                          + DrivAge + log(DrivAge) +  I(DrivAge^2) + I(DrivAge^3) + I(DrivAge^4),  
+                        data = freMTPL2full, subset = train_indices,
+                        offset = log(Exposure), family = poisson(link = "log"))
+summary(freqPoisson_age1)
+
+#Binning Continuous Predictors
+freMTPL2full$DrivAgeBins <- as.factor(cut(freMTPL2full$DrivAge, c(18, 20, 25, 30, 40, 50, 70, 101),
+                        labels = c("18-20", "21-25", "26-30", "31-40", "41-50", "51-70", "71+"), 
+                        include.lowest = TRUE))
+
+freqPoisson_age2 <- glm(ClaimNb ~ VehPower + VehAge + BonusMalus + 
+                          VehBrand + VehGas + Density + Region + Area +
+                          + DrivAgeBins,  
+                        data = freMTPL2full, subset = train_indices,
+                        offset = log(Exposure), family = poisson(link = "log"))
+summary(freqPoisson_age2)
+```
+
+```{=tex}
+\begin{taskbox}
+\textbf{Exercise:} What are the limitations of these two transformations?
+
+\textit{Hint:} Please refer to Sections 5.4.2 and 5.4.3 of \href{https://www.casact.org/sites/default/files/2021-01/05-Goldburd-Khare-Tevet.pdf}{Generalized Linear Models for Insurance Rating} for further insights on the limitations of polynomial terms and binning continuous predictors.
+\end{taskbox}
+```
+### Poisson GLM with Pre-processed Data Following @wuthrich2023statistical {#sec-prepfreqpoisson}
+
+Lastly, we present an example of a Poisson frequency model following the feature engineering steps in @wuthrich2023statistical, as shown in the code below:
+
+```{r}
+freMTPL2prep <- freMTPL2full
+freMTPL2prep$AreaGLM <- as.integer(freMTPL2prep$Area)
+freMTPL2prep$VehPowerGLM <- as.factor(pmin(freMTPL2prep$VehPower, 9))
+freMTPL2prep$VehAgeGLM <- as.factor(cut(freMTPL2prep$VehAge, c(0, 5, 12, 101),
+                                        labels = c("0-5", "6-12", "12+"), 
+                                        include.lowest = TRUE))
+freMTPL2prep$DrivAgeGLM <- as.factor(cut(freMTPL2prep$DrivAge, c(18, 20, 25, 30, 40, 50, 70, 101),
+                                         labels = c("18-20", "21-25", "26-30", "31-40", "41-50", 
+                                                    "51-70", "71+"), include.lowest = TRUE))
+freMTPL2prep$BonusMalusGLM <- pmin(freMTPL2prep$BonusMalus, 150)
+freMTPL2prep$DensityGLM <- log(freMTPL2prep$Density)
+```
+
+```{r}
+freqPoisson_full2 <- glm(ClaimNb ~ VehPowerGLM + VehAgeGLM + DrivAgeGLM + BonusMalusGLM + 
+                          VehBrand + VehGas + DensityGLM + Region + AreaGLM,  
+                        data = freMTPL2prep, subset = train_indices,
+                        offset = log(Exposure), family = poisson(link = "log"))
+summary(freqPoisson_full2)
+```
+
+## Model Comparison {#sec-model-comparison}
+
+```{r}
+#Function for Poisson Deviance
+compute_poisson_deviance <- function(model, test_data, exposure) {
+  # Predict on the test set using the model
+  predicted_values <- predict(model, newdata = test_data, type = "response")
+  
+  # Extract the observed values
+  observed_values <- test_data$ClaimNb
+  
+  # Compute the Poisson deviance
+  deviance <- 2 * sum(observed_values * log(observed_values / predicted_values) - 
+                        (observed_values - predicted_values), na.rm = TRUE)
+  
+  return(deviance)
+}
+```
+
+```{r}
+#Find AIC and Poisson Deviance
+dev_poisson_full <- compute_poisson_deviance(freqPoisson_full, 
+                                             test_data = freMTPL2full[-train_indices, ], 
+                                             exposure = freMTPL2full$Exposure[-train_indices])
+print(dev_poisson_full)
+aic_poisson_full <- AIC(freqPoisson_full)
+print(aic_poisson_full)
+
+dev_poisson_full2 <- compute_poisson_deviance(freqPoisson_full2,
+                                              test_data = freMTPL2prep[-train_indices, ], 
+                                              exposure = freMTPL2prep$Exposure[-train_indices])
+print(dev_poisson_full2)
+aic_poisson_full2 <- AIC(freqPoisson_full2)
+print(aic_poisson_full2)
+
+```
+
+In the code above, two Poisson regression models - `freqPoisson_full`, using the original data, and `freqPoisson_full2`, using pre-processed data following @wuthrich2023statistical - are compared. AIC is used as an in-sample measure on the training data to evaluate model fit. Poisson deviance is computed on the test data as an out-of-sample measure to assess predictive performance. As expected, `freqPoisson_full2` outperforms `freqPoisson_full` on both measures.
+
+# Modeling Claim Severity Using GLMs
+
+For insurance analysts, one strength of the GLM approach is that the same set of routines can be used for continuous as well as discrete outcomes. For the severity, it is common to use a **gamma** or **inverse Gaussian** distribution, often with a **logarithmic link** (primarily for parameter interpretability).
+
+## Gamma GLM for Claim Severities
+
+### Task Solution: Fit a Gamma GLM (Full Model) Using All Available Training Data Except `IDpol`. Model the Total Claim per Policy as the Target Variable, Include an Offset for Claim Count, and Set Claim Count as the GLM Weight.
+
+```{r}
+#Total claim size
+sevGamma_full <- glm(ClaimTotal ~ offset(log(ClaimNb)) + VehPower + VehAge + DrivAge + BonusMalus + 
+                  VehBrand + VehGas + Density + Region + Area,
+                family = Gamma(link = "log"), 
+                weights = ClaimNb, 
+                data = filter(freMTPL2full[train_indices, ], ClaimNb > 0))
+
+summary(sevGamma_full)
+```
+
+Here, we model the total claim size as the response. Since records with more claims are expected to have more stable experience, the claim count is set as the GLM weight, and we only use records with a nonzero claim count [@frees2014predictive]. Alternatively, we can model the average claim size as the response (the two models should produce the same results), as shown in the code below:
+
+```{r echo=TRUE, eval=FALSE}
+#Average claim size
+sevGamma_fullalt <- glm(ClaimTotal/ClaimNb ~ VehPower + VehAge + DrivAge + BonusMalus + 
+                       VehBrand + VehGas + Density + Region + Area,
+                     family = Gamma(link = "log"), 
+                     weights = ClaimNb, 
+                     data = filter(freMTPL2full[train_indices, ], ClaimNb > 0))
+
+summary(sevGamma_fullalt)
+```
+
+Please note that the main (or possibly the only) difference between the two equivalent models is that the first model will output the total claim amount when making predictions, while the second model will output the claim severity.
+
+**Modelling Individual Claim Size**
+
+In fact, if we don't merge the frequency and severity data, we can model the claim size using individual claim sizes, which is a more ideal approach compared to using average or total claim sizes (you might want to think about why this is the case).
+
+```{r}
+freq_data2 <- freMTPL2freq[, -2]
+freq_data2$VehGas <- factor(freq_data2$VehGas)
+sev_data2 <- freMTPL2sev
+sev_data2$ClaimNb <- 1
+merged_data2 <- merge(x=sev_data2, y=freq_data2, by="IDpol", all.x=TRUE)
+merged_data2 <- merged_data2[merged_data2$ClaimNb <= 5, ]
+merged_data2$Exposure <- pmin(merged_data2$Exposure, 1)
+freMTPL2full2 <- merged_data2
+```
+
+Note that `freMTPL2full2` only contains severity data for policies with a claim number greater than 0, and a policy may appear in multiple rows if it has multiple claims.
+
+```{r}
+# Extract IDpols from freMTPL2full based on train_indices
+train_IDpols <- freMTPL2full[train_indices, "IDpol"]
+# Find rows in freMTPL2full2 where IDpol matches those from train_IDpols
+train_indices2 <- which(freMTPL2full2$IDpol %in% train_IDpols)
+```
+
+If you have separate severity and frequency data, note that the severity data has a different format from the merged data `freMTPL2full` we used earlier (where a row represents either a policy or a claim). To ensure a fair comparison across different models on the testing set, we can filter the training data in `freMTPL2full2` by only keeping rows where the `IDpol` appears in `freMTPL2full[train_indices, ]`.
+
+```{r}
+#Individual claim size
+sevGamma_fullalt2 <- glm(ClaimAmount ~ VehPower + VehAge + DrivAge + BonusMalus + 
+                       VehBrand + VehGas + Density + Region + Area,
+                     family = Gamma(link = "log"), 
+                     data = freMTPL2full2[train_indices2, ])
+
+summary(sevGamma_fullalt2)
+```
+
+The model fit for individual claim size is shown above.
+
+```{r, fig.align='center', fig.height=3, fig.width=4.5}
+plot(sevGamma_full$fitted.values,rstandard(sevGamma_full),
+     xlab="Fitted values",ylab="Standardized deviance residuals",
+     main="SDR vs FV, Gamma")
+abline(h=0,col="red",lty=2)
+
+qqnorm(rstandard(sevGamma_full))
+qqline(rstandard(sevGamma_full),col="red")
+```
+
+The residual analysis suggests that the gamma distribution does not fit the data well. (Note that we use standardized deviance residuals here, as the response is continuous.) In fact, if we plot the empirical distribution of claim amounts (as shown below), the French MTPL data appears to have three distinct modes with heavy tails, along with many fixed-size payments, as pointed out in @wuthrich2023statistical. This further confirms the unsuitability of the gamma distribution
+
+```{r, fig.align='center', fig.height=3, fig.width=4.5}
+# Create the density plot using ggplot
+ggplot(filter(freMTPL2full[train_indices, ], ClaimNb > 0), aes(x = ClaimTotal)) +
+  geom_density(color = "darkblue", linewidth = 0.8) +
+  labs(title = "Empirical Density of Claim Amounts",
+       x = "Claim Total",
+       y = "Density") +
+  xlim(0, 10000) + 
+  theme_minimal()
+```
+
+Note: We haven't shown the fit of the Inverse Gaussian GLM here, as the model encountered convergence issues with this dataset. You are welcome to explore this further on your own by setting `family = inverse.gaussian(link = "log")` in the `glm` function.
+
+### Gamma GLM with Pre-processed Data
+
+Here, we fit a Gamma GLM corresponding to Section \@ref(sec-prepfreqpoisson) using the same pre-processed data, following the steps in @wuthrich2023statistical. In this model, no predictors are dropped compared to the full model. You are encouraged to try it yourself. It is also important to note that you can conduct feature engineering separately or jointly with the frequency model, and the set of predictors used in the severity model can differ from those in the frequency model---this is a major advantage of the frequency-severity approach over pure premium modeling. However, for the sake of time, we use the same predictors as in our frequency modeling.
+
+```{r}
+sevGamma_full2 <- glm(ClaimTotal ~ offset(log(ClaimNb)) + VehPowerGLM + VehAgeGLM + DrivAgeGLM + 
+                        BonusMalusGLM + VehBrand + VehGas + DensityGLM + Region + AreaGLM,
+                      family = Gamma(link = "log"), 
+                      weights = ClaimNb, 
+                      data = filter(freMTPL2prep[train_indices, ], ClaimNb > 0))
+
+summary(sevGamma_full2)
+```
+
+# Modeling Aggregate Loss Using GLMs
+
+The Tweedie distribution is defined as a Poisson sum of gamma random variables. Specifically, suppose that $N$ has a Poisson distribution with mean $lambda$, representing the number of claims. Let $y_j$ be an i.i.d. sequence, independent of $N$, with each $y_j$ having a gamma distribution with parameters $\alpha$ and $\beta$, representing the amount of a claim.
+
+Then, $S = y_1 + ... + y_N$ is a Poisson sum of gammas.
+
+## Tweedie GLM for Pure Premiums
+
+### Task Solution: Fit a Tweedie GLM (Full Model) Using All Available Training Data Except `IDpol`. Model the Total Claim per Policy as the Target Variable and Include an Offset for Exposure Volume.
+
+```{r}
+premTweedie_full <- glm(ClaimTotal ~ offset(log(Exposure)) + VehPower + VehAge + DrivAge + BonusMalus +
+                       VehBrand + VehGas + Density + Region + Area,
+                       family = tweedie(var.power=1.5, link.power=0),
+                     data = freMTPL2full[train_indices,])
+summary(premTweedie_full) 
+```
+
+```{r, fig.align='center', fig.height=3, fig.width=4.5}
+set.seed(823)
+plot(premTweedie_full$fitted.values[sample_indices],qresiduals(premTweedie_full)[sample_indices],
+     xlab="Fitted values",
+     ylab="Randomized Quantile Residuals",
+     main="Diagnostic checking: RQR vs FV, Tweedie")
+abline(h=0,col="red",lty=2)
+
+qqnorm(qresiduals(premTweedie_full)[sample_indices])
+qqline(qresiduals(premTweedie_full)[sample_indices],col="red")
+```
+
+# Model Validation and Evaluation
+
+In this section, we summarize both quantitative measures and visual plotting techniques that can be used for model evaluation and comparison.
+
+## Measures of Model Performance
+
+In Section \@ref(sec-model-comparison), we use AIC and Poisson deviance to compare claim frequency models (there are other deviance loss functions, such as Gamma or Tweedie deviance loss, that you are welcome to explore on your own!). However, you need to make sure to use the correct deviance loss function to evaluate the corresponding models. Note, models are comparable if their deviance loss function is the same (see a similar discussion in Section 6.1.3 of [Generalized Linear Models for Insurance Rating](https://www.casact.org/sites/default/files/2021-01/05-Goldburd-Khare-Tevet.pdf)).
+
+In addition to these metrics, we use RMSE (@selvakumar2021predictive) and Spearman correlation (@frees2016multivariate, @lee2019dependent) in this section to evaluate prediction performance. Other measures, such as the Gini index, will be explored in the following section.
+
+```{r}
+freMTPL2fulltest <- freMTPL2full[-train_indices, ]
+freMTPL2fulltest2 <- freMTPL2prep[-train_indices, ]
+freMTPL2fulltest$AClaimNb <- freMTPL2full[-train_indices, ]$ClaimNb #save actual ClaimNb
+freMTPL2fulltest2$AClaimNb <- freMTPL2prep[-train_indices, ]$ClaimNb
+
+freMTPL2fulltest$ClaimNb <- predict(freqPoisson_full, newdata = freMTPL2fulltest, type = "response")
+freMTPL2fulltest$predcost <- predict(sevGamma_full, newdata = freMTPL2fulltest, type = "response")
+
+freMTPL2fulltest2$ClaimNb <- predict(freqPoisson_full2, newdata = freMTPL2fulltest2, type = "response")
+freMTPL2fulltest2$predcost2 <- predict(sevGamma_full2, newdata = freMTPL2fulltest2, type = "response")
+
+freMTPL2fulltest$ClaimNb_cost <- freMTPL2fulltest$ClaimNb
+freMTPL2fulltest2$ClaimNb_cost <- freMTPL2fulltest2$ClaimNb
+
+#RMSE
+RMSE(freMTPL2fulltest$ClaimNb, freMTPL2full[-train_indices, ]$ClaimNb)
+RMSE(freMTPL2fulltest2$ClaimNb, freMTPL2prep[-train_indices, ]$ClaimNb)
+
+RMSE(freMTPL2fulltest$predcost[freMTPL2fulltest$AClaimNb > 0] / 
+       freMTPL2fulltest$ClaimNb[freMTPL2fulltest$AClaimNb > 0], 
+     freMTPL2full[-train_indices, ]$ClaimTotal[freMTPL2full[-train_indices, ]$ClaimNb > 0] / 
+       freMTPL2full[-train_indices, ]$ClaimNb[freMTPL2full[-train_indices, ]$ClaimNb > 0])
+RMSE(freMTPL2fulltest2$predcost2[freMTPL2fulltest2$AClaimNb > 0] / 
+       freMTPL2fulltest2$ClaimNb[freMTPL2fulltest2$AClaimNb > 0], 
+     freMTPL2prep[-train_indices, ]$ClaimTotal[freMTPL2prep[-train_indices, ]$ClaimNb > 0] / 
+       freMTPL2prep[-train_indices, ]$ClaimNb[freMTPL2prep[-train_indices, ]$ClaimNb > 0])
+
+RMSE(freMTPL2fulltest$predcost, freMTPL2full[-train_indices, ]$ClaimTotal)
+RMSE(freMTPL2fulltest2$predcost2, freMTPL2prep[-train_indices, ]$ClaimTotal)
+
+# Spearman correlation
+# frequency
+cor(freMTPL2fulltest$ClaimNb,freMTPL2full[-train_indices, ]$ClaimNb, method = "spearman") 
+cor(freMTPL2fulltest2$ClaimNb,freMTPL2prep[-train_indices, ]$ClaimNb, method = "spearman")
+
+# severity
+cor(freMTPL2fulltest$predcost[freMTPL2fulltest$AClaimNb > 0] / 
+       freMTPL2fulltest$ClaimNb[freMTPL2fulltest$AClaimNb > 0], 
+     freMTPL2full[-train_indices, ]$ClaimTotal[freMTPL2full[-train_indices, ]$ClaimNb > 0] / 
+       freMTPL2full[-train_indices, ]$ClaimNb[freMTPL2full[-train_indices, ]$ClaimNb > 0]
+    , method = "spearman")
+
+cor(freMTPL2fulltest2$predcost2[freMTPL2fulltest2$AClaimNb > 0] / 
+       freMTPL2fulltest2$ClaimNb[freMTPL2fulltest2$AClaimNb > 0], 
+     freMTPL2prep[-train_indices, ]$ClaimTotal[freMTPL2prep[-train_indices, ]$ClaimNb > 0] / 
+       freMTPL2prep[-train_indices, ]$ClaimNb[freMTPL2prep[-train_indices, ]$ClaimNb > 0]
+    , method = "spearman")
+
+# pure premium 
+cor(freMTPL2fulltest$predcost,freMTPL2full[-train_indices, ]$ClaimTotal, method = "spearman") 
+cor(freMTPL2fulltest2$predcost2,freMTPL2prep[-train_indices, ]$ClaimTotal, method = "spearman")
+```
+
+Please note that when predicting claim counts, the predicted values are already adjusted for the actual `Exposure` information, which is included as an offset in the Poisson frequency model. Similarly, when modeling the total claim size in `sevGamma_full` and `sevGamma_full2`, we need to adjust the predicted claim counts from `freqPoisson_full` and `freqPoisson_full2` to obtain the predicted claim costs. Specifically, the predicted cost is derived from model 2, after adjusting or offsetting the frequency model's prediction (i.e., by replacing the `ClaimNb` column in the test data with the predicted claim count from `freqPoisson_full` and `freqPoisson_full2`). If we model the average claim cost in `sevGamma_full` and `sevGamma_full2`, the predicted cost is obtained by multiplying the frequency model's prediction by the severity model's prediction.
+
+From the metrics above, `freqPoisson_full2` outperforms `freqPoisson_full` across all metrics, and the combination of frequency-severity modeling performs better on the pre-processed data than on the original data. However, it is unclear whether `sevGamma_full2` outperforms `sevGamma_full1`.
+
+## Gini Curve (Measure the Lift)
+
+The Gini index can be used to measure the lift of an insurance rating plan by quantifying its ability to segment the population into the best and worst risks. Here, lift refers to a model's ability to charge each insured an actuarially fair rate, thereby minimizing the potential for adverse selection. This is a relative concept and requires two or more competing models. Following Section 7.2 of [Generalized Linear Models for Insurance Rating](https://www.casact.org/sites/default/files/2021-01/05-Goldburd-Khare-Tevet.pdf), the Gini index for a model that creates a rating plan is calculated as follows:
+
+1.  Sort the dataset based on the model predicted loss cost. The records at the top of the dataset are then the risks which the model believes are best, and the records at the bottom of the dataset are the risks which the model believes are worst.
+
+2.  On the x-axis, plot the cumulative percentage of exposures.
+
+3.  On the y-axis, plot the cumulative percentage of losses.
+
+In the code below, we modify this procedure by using the number of policies instead of the cumulative percentage of exposure. This is achieved by assigning an exposure of 1 to all policies, due to the presence of a significant number of very small exposures in the dataset. Please note that, typically, exposure (rather than policy count) is preferred.
+
+```{r, fig.align='center', fig.height=3, fig.width=4.5, warning=FALSE}
+freMTPL2fulltest$ClaimNb <- freMTPL2full[-train_indices, ]$ClaimNb #restore actual ClaimNb
+freMTPL2fulltest2$ClaimNb <- freMTPL2prep[-train_indices, ]$ClaimNb
+freMTPL2fulltest$AExposure <- freMTPL2fulltest$Exposure #save actual exposure
+freMTPL2fulltest2$AExposure <- freMTPL2fulltest2$Exposure
+freMTPL2fulltest$Exposure <- 1
+freMTPL2fulltest2$Exposure <- 1
+
+freMTPL2fulltest$ClaimNb <- predict(freqPoisson_full, newdata = freMTPL2fulltest, type = "response")
+freMTPL2fulltest$predprem <- predict(sevGamma_full, newdata = freMTPL2fulltest, type = "response")
+
+freMTPL2fulltest2$ClaimNb <- predict(freqPoisson_full2, newdata = freMTPL2fulltest2, type = "response")
+freMTPL2fulltest2$predprem2 <- predict(sevGamma_full2, newdata = freMTPL2fulltest2, type = "response")
+
+# Sort the data by predicted claim cost for both models
+freMTPL2fulltest <- freMTPL2fulltest[order(freMTPL2fulltest$predprem), ]
+freMTPL2fulltest2 <- freMTPL2fulltest2[order(freMTPL2fulltest2$predprem2), ]
+
+# Calculate the cumulative sum of predicted claim costs and the cumulative proportion of 
+# observations for both models
+freMTPL2fulltest$cumPredictedprem <- cumsum(freMTPL2fulltest$predprem) / sum(freMTPL2fulltest$predprem)
+freMTPL2fulltest$cumObservations <- seq_along(freMTPL2fulltest$predprem) / nrow(freMTPL2fulltest)
+
+freMTPL2fulltest2$cumPredictedprem <- cumsum(freMTPL2fulltest2$predprem2) / sum(freMTPL2fulltest2$predprem2)
+freMTPL2fulltest2$cumObservations <- seq_along(freMTPL2fulltest2$predprem2) / nrow(freMTPL2fulltest2)
+
+# Combine the data for both models into a single data frame for plotting
+gini_data_full1 <- data.frame(
+  cumObservations = freMTPL2fulltest$cumObservations,
+  cumPredictedprem = freMTPL2fulltest$cumPredictedprem,
+  Model = "Model 1"
+)
+
+gini_data_full2 <- data.frame(
+  cumObservations = freMTPL2fulltest2$cumObservations,
+  cumPredictedprem = freMTPL2fulltest2$cumPredictedprem,
+  Model = "Model 2"
+)
+
+# Combine both datasets into one for plotting
+gini_data_combined <- rbind(gini_data_full1, gini_data_full2)
+
+# Create the Gini curve plot for both models with custom colors
+ggplot(gini_data_combined, aes(x = cumObservations, y = cumPredictedprem, color = Model)) +
+  geom_line(size = 1.2) +  # Set same size for both Gini curves
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "black", size = 1.2) +  
+  # Line of equality
+  scale_x_continuous(limits = c(0, 1), expand = c(0, 0)) +  
+  # Ensure red line starts at (0, 0) and ends at (1, 1)
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  labs(title = "Gini Curve Comparison for Two Models",
+       x = "Cumulative Proportion of Policyholders",
+       y = "Cumulative Proportion of Predicted Claim Costs") +
+  scale_color_manual(values = c("blue", "green")) +  # Custom colors for the models
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 10),
+    axis.title = element_text(size = 8),
+    axis.text = element_text(size = 6),
+    legend.title = element_blank()  # Remove legend title
+  )
+
+# Function to calculate Gini Index correctly
+gini_index <- function(cumObs, cumPred) {
+  # Use trapezoidal rule to approximate area under the Lorenz curve
+  auc <- sum((cumObs[-1] - cumObs[-length(cumObs)]) * (cumPred[-1] + cumPred[-length(cumPred)]) / 2)
+  
+  # The Gini coefficient is 1 minus twice the area under the Lorenz curve
+  gini <- 1 - 2 * auc
+  return(gini)
+}
+
+# Apply the function to your data
+gini_full <- gini_index(freMTPL2fulltest$cumObservations, freMTPL2fulltest$cumPredictedprem)
+print(gini_full)
+gini_full2 <- gini_index(freMTPL2fulltest2$cumObservations, freMTPL2fulltest2$cumPredictedprem)
+print(gini_full2)
+
+#Alternatively, this can be computed using ineq package
+library(ineq)
+
+# Compute the Gini index
+gini2_full <- ineq(freMTPL2fulltest$predprem, type = "Gini")
+print(gini2_full)
+
+gini2_full2 <- ineq(freMTPL2fulltest2$predprem2, type = "Gini")
+print(gini2_full2)
+```
+
+Also, note that the Gini index on validation data can be used to compare a model's ranking performance, but not its calibration. The combination of frequency-severity modeling performs better on the pre-processed data than on the original data, as a larger Gini index suggests that the model segments risks more effectively by showing a greater difference between the worst and best risks.
+
+## Quantile Plot
+
+Quantile plots can be used to visualize a model's ability to accurately differentiate between the best and worst risks. A common choice is the decile plot, which divides predictions into ten bins with equal exposure and contrasts actual versus modeled outcomes. Here, we focus specifically on claim frequency predictions (note that it can also be applied to pure premium predictions). The decile plot can help evaluate the following [@goldburd2016generalized]:
+
+1)  **Predictive Accuracy (Model Calibration)**: This refers to how well a model predicts the insurance outcome in each quantile. A well-calibrated model will show small differences between actual and predicted values in each bin, with no significant over- or underestimation in the top or bottom bins.
+
+2)  **Model Fit**: A model achieves a good fit if the ratio between the top and bottom bins is high, representing a large difference (or lift) between the groups we believe to have either the best or worst experience.
+
+3)  **Monotonicity**: By definition, the predicted insurance outcome should monotonically increase as the quantile increases. Ideally, the actual insurance outcome should also increase, although small reversals are acceptable.
+
+4)  **Overfitting**: The plot can check for overfitting by assessing whether the model's performance deteriorates significantly between the training and testing data.
+
+```{r}
+#Compute In-sample Predictions
+freMTPL2fulltrain <- freMTPL2full[train_indices, ]
+freMTPL2fulltrain2 <- freMTPL2prep[train_indices, ]
+freMTPL2fulltrain$AClaimNb <- freMTPL2full[train_indices, ]$ClaimNb #save actual ClaimNb
+freMTPL2fulltrain2$AClaimNb <- freMTPL2prep[train_indices, ]$ClaimNb
+
+freMTPL2fulltrain$ClaimNb <- predict(freqPoisson_full, newdata = freMTPL2fulltrain, type = "response")
+freMTPL2fulltrain$predcost <- predict(sevGamma_full, newdata = freMTPL2fulltrain, type = "response")
+freMTPL2fulltrain2$ClaimNb <- predict(freqPoisson_full2, newdata = freMTPL2fulltrain2, type = "response")
+freMTPL2fulltrain2$predcost2 <- predict(sevGamma_full2, newdata = freMTPL2fulltrain2, type = "response")
+
+freMTPL2fulltrain$ClaimNb_cost <- freMTPL2fulltrain$ClaimNb
+freMTPL2fulltrain$ClaimNb  <- freMTPL2fulltrain$AClaimNb 
+freMTPL2fulltrain2$ClaimNb_cost <- freMTPL2fulltrain2$ClaimNb
+freMTPL2fulltrain2$ClaimNb  <- freMTPL2fulltrain2$AClaimNb 
+```
+
+**Model 1** (`freqPoisson_full`)
+
+```{r, fig.align='center', fig.height=3, fig.width=4.5, warning=FALSE}
+decile_fulltrain <- freMTPL2fulltrain
+decile_fulltest <- freMTPL2fulltest
+decile_fulltrain2 <- freMTPL2fulltrain2
+decile_fulltest2 <- freMTPL2fulltest2
+
+decile_fulltest$Exposure <- decile_fulltest$AExposure
+decile_fulltest2$Exposure <- decile_fulltest2$AExposure
+
+# Step 1: Sort the dataset by predicted claim frequency
+freMTPL2fulltrain_sorted <- decile_fulltrain %>%
+  arrange(ClaimNb_cost/Exposure)
+
+freMTPL2fulltest_sorted <- decile_fulltest %>%
+  arrange(ClaimNb_cost/Exposure)
+
+# Step 2: Calculate cumulative exposure and split it into deciles manually to ensure 
+# equal exposure in each decile
+total_exposure_train <- sum(freMTPL2fulltrain_sorted$Exposure)
+total_exposure_test <- sum(freMTPL2fulltest_sorted$Exposure)
+
+# Step 3: Use cut() to divide the cumulative exposure into deciles where exposure is roughly equal
+freMTPL2fulltrain_sorted <- freMTPL2fulltrain_sorted %>%
+  mutate(cum_exposure = cumsum(Exposure),
+         decile = cut(cum_exposure, breaks = seq(0, total_exposure_train, length.out = 11), 
+                      include.lowest = TRUE, labels = FALSE))
+
+freMTPL2fulltest_sorted <- freMTPL2fulltest_sorted %>%
+  mutate(cum_exposure = cumsum(Exposure),
+         decile = cut(cum_exposure, breaks = seq(0, total_exposure_test, length.out = 11), 
+                      include.lowest = TRUE, labels = FALSE))
+
+# Step 4: Calculate average predicted and actual claim frequencies within each decile
+decile_summarytrain <- freMTPL2fulltrain_sorted %>%
+  group_by(decile) %>%
+  summarise(
+    avg_predicted_claimnb = sum(ClaimNb_cost)/sum(Exposure),
+    avg_actual_claimnb = sum(AClaimNb)/sum(Exposure)
+  )
+
+decile_summarytest <- freMTPL2fulltest_sorted %>%
+  group_by(decile) %>%
+  summarise(
+    avg_predicted_claimnb = sum(ClaimNb_cost)/sum(Exposure),
+    avg_actual_claimnb = sum(AClaimNb)/sum(Exposure)
+  )
+
+# Step 5: Plot actual vs predicted claim frequencies for each decile
+# Plot for Train Set
+ggplot(decile_summarytrain, aes(x = factor(decile))) +
+  geom_line(aes(y = avg_predicted_claimnb, group = 1, color = "Predicted"), size = 1.2) +
+  geom_line(aes(y = avg_actual_claimnb, group = 1, color = "Actual"), size = 1.2) +
+  labs(x = "Decile", y = "Claim Frequency", title = "Decile Plot: Actual vs Predicted (Train Set)") +
+  theme_minimal() +
+  guides(color = guide_legend(title = NULL))
+
+# Plot for Test Set
+ggplot(decile_summarytest, aes(x = factor(decile))) +
+  geom_line(aes(y = avg_predicted_claimnb, group = 1, color = "Predicted"), size = 1.2) +
+  geom_line(aes(y = avg_actual_claimnb, group = 1, color = "Actual"), size = 1.2) +
+  labs(x = "Decile", y = "Claim Frequency", title = "Decile Plot: Actual vs Predicted (Test Set)") +
+  theme_minimal() +
+  guides(color = guide_legend(title = NULL))
+```
+
+**Model 2** (`freqPoisson_full2`)
+
+```{r, fig.align='center', fig.height=3, fig.width=4.5, warning=FALSE}
+# Step 1: Sort the dataset by predicted claim frequency
+freMTPL2fulltrain2_sorted <- decile_fulltrain2 %>%
+  arrange(ClaimNb_cost/Exposure)
+
+freMTPL2fulltest2_sorted <- decile_fulltest2 %>%
+  arrange(ClaimNb_cost/Exposure)
+
+# Step 2: Calculate cumulative exposure and split it into deciles manually to ensure 
+# equal exposure in each decile
+total_exposure_train2 <- sum(freMTPL2fulltrain2_sorted$Exposure)
+total_exposure_test2 <- sum(freMTPL2fulltest2_sorted$Exposure)
+
+# Step 3: Use cut() to divide the cumulative exposure into deciles where exposure is roughly equal
+freMTPL2fulltrain2_sorted <- freMTPL2fulltrain2_sorted %>%
+  mutate(cum_exposure = cumsum(Exposure),
+         decile = cut(cum_exposure, breaks = seq(0, total_exposure_train, length.out = 11), 
+                      include.lowest = TRUE, labels = FALSE))
+
+freMTPL2fulltest2_sorted <- freMTPL2fulltest2_sorted %>%
+  mutate(cum_exposure = cumsum(Exposure),
+         decile = cut(cum_exposure, breaks = seq(0, total_exposure_test, length.out = 11), 
+                      include.lowest = TRUE, labels = FALSE))
+
+# Step 4: Calculate average predicted and actual claim frequencies within each decile
+decile_summarytrain2 <- freMTPL2fulltrain2_sorted %>%
+  group_by(decile) %>%
+  summarise(
+    avg_predicted_claimnb = sum(ClaimNb_cost)/sum(Exposure),
+    avg_actual_claimnb = sum(AClaimNb)/sum(Exposure)
+  )
+
+decile_summarytest2 <- freMTPL2fulltest2_sorted %>%
+  group_by(decile) %>%
+  summarise(
+    avg_predicted_claimnb = sum(ClaimNb_cost)/sum(Exposure),
+    avg_actual_claimnb = sum(AClaimNb)/sum(Exposure)
+  )
+
+# Step 5: Plot actual vs predicted claim frequencies for each decile
+# Plot for Train Set
+ggplot(decile_summarytrain2, aes(x = factor(decile))) +
+  geom_line(aes(y = avg_predicted_claimnb, group = 1, color = "Predicted"), size = 1.2) +
+  geom_line(aes(y = avg_actual_claimnb, group = 1, color = "Actual"), size = 1.2) +
+  labs(x = "Decile", y = "Claim Frequency", title = "Decile Plot: Actual vs Predicted (Train Set)") +
+  theme_minimal() +
+  guides(color = guide_legend(title = NULL))
+
+# Plot for Test Set
+ggplot(decile_summarytest2, aes(x = factor(decile))) +
+  geom_line(aes(y = avg_predicted_claimnb, group = 1, color = "Predicted"), size = 1.2) +
+  geom_line(aes(y = avg_actual_claimnb, group = 1, color = "Actual"), size = 1.2) +
+  labs(x = "Decile", y = "Claim Frequency", title = "Decile Plot: Actual vs Predicted (Test Set)") +
+  theme_minimal() +
+  guides(color = guide_legend(title = NULL))
+```
+
+Both models fit well from the three perspectives we discussed.
+
+```{=tex}
+\begin{taskbox}
+\textbf{Exercise:} In addition to the Gini index introduced above, there are other techniques that can be used to directly compare two candidate models. Please read Section 7 of \href{https://www.casact.org/sites/default/files/2021-01/05-Goldburd-Khare-Tevet.pdf}{Generalized Linear Models for Insurance Rating}, with a particular focus on actual vs. predicted plots \footnote{You can also plot this across all categories of the variable of interest by comparing the average actual values with the model predictions for each category.}, simple quantile plots and double lift charts.
+\end{taskbox}
+```
+
+# Appendix
+
+## Chi-square goodness of fit test on frequency data
+
+When an analyst attempts to fit a statistical model to observed data, he or she may wonder how well the model actually reflects the data. How "close" are the observed values to those which would be expected under the fitted model? One statistical test that addresses this issue is the chi-square goodness of fit test. [Chi-Square Goodness of Fit Test](http://www.stat.yale.edu/Courses/1997-98/101/chigf.htm)
+
+$$\chi^2 = \sum \frac{(\text{observed} - \text{expected})^2}{\text{expected}}$$
+Chi-square goodness of fit statistics can be used to compare different models. If the computed test statistic is large, then the observed and expected values are not close and the model is a poor fit to the data. 
+
+# Reference

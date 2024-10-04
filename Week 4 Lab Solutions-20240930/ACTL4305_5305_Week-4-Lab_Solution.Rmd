@@ -178,7 +178,7 @@ knitr::include_graphics("boot.pdf")
 We first load the data and build three target models.
 
 ```{r}
-Data <- read.csv("insurance.csv")
+ Data <- read.csv("insurance.csv")
 #Divide data into X and Y
 Data_X <- Data[,-7]
 Data_Y <- Data[,7]
