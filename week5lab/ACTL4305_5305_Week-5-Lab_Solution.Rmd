@@ -192,8 +192,7 @@ Our objective is to build GLMs to predict the frequency using related risk facto
 
 **Remark (Interaction terms)**: Two predictors are said to interact if the effect that one of them has on the mean response depends on the value of the other. The product term $x_1 \times x_2$ models an interaction between $x_1$ and $x_2$. Except in special circumstances, a model including a product term for interaction between two predictors should also include terms with each of the predictors.
 
-**Remark (Basis Expansions)**: Similar to linear models, we could also extend the features using basis functions, such as polynomial, splines, etc. The basis function model becomes $$ g(\mu)=\beta_0+h(x_1)\beta_1+\cdots+h(x_p)\beta_p.$$ 
-Additionally, recall that **Generalized Additive Models (GAMs)** were introduced in the "Moving Beyond Linearity" section of the prerequisite course. Feel free to explore them further on your own!
+**Remark (Basis Expansions)**: Similar to linear models, we could also extend the features using basis functions, such as polynomial, splines, etc. The basis function model becomes $$ g(\mu)=\beta_0+h(x_1)\beta_1+\cdots+h(x_p)\beta_p.$$ Additionally, recall that **Generalized Additive Models (GAMs)** were introduced in the "Moving Beyond Linearity" section of the prerequisite course. Feel free to explore them further on your own!
 
 **Remark (Shrinkage Techniques)**: Recall the shrinkage techniques we discussed in Week 3. Using the `glmnet` package, we can do GLM with shrinkage techniques.
 
@@ -436,7 +435,6 @@ We performed backward stepwise selection using AIC, which only removed `Density`
 2. So far, we've only used backward stepwise selection with AIC. Now, explore other stepwise selection methods (e.g., forward stepwise selection) or use a different criterion (e.g., BIC). Do these approaches result in a different set of predictors being selected?
 \end{taskbox}
 ```
-
 ### Regularization Methods (from Week 3)
 
 Alternatively, we can fit Poisson lasso or ridge regression. We leave these methods as an exercise for you to explore further.
@@ -1018,14 +1016,12 @@ Both models fit well from the three perspectives we discussed.
 \textbf{Exercise:} In addition to the Gini index introduced above, there are other techniques that can be used to directly compare two candidate models. Please read Section 7 of \href{https://www.casact.org/sites/default/files/2021-01/05-Goldburd-Khare-Tevet.pdf}{Generalized Linear Models for Insurance Rating}, with a particular focus on actual vs. predicted plots \footnote{You can also plot this across all categories of the variable of interest by comparing the average actual values with the model predictions for each category.}, simple quantile plots and double lift charts.
 \end{taskbox}
 ```
-
 # Appendix
 
 ## Chi-square goodness of fit test on frequency data
 
 When an analyst attempts to fit a statistical model to observed data, he or she may wonder how well the model actually reflects the data. How "close" are the observed values to those which would be expected under the fitted model? One statistical test that addresses this issue is the chi-square goodness of fit test. [Chi-Square Goodness of Fit Test](http://www.stat.yale.edu/Courses/1997-98/101/chigf.htm)
 
-$$\chi^2 = \sum \frac{(\text{observed} - \text{expected})^2}{\text{expected}}$$
-Chi-square goodness of fit statistics can be used to compare different models. If the computed test statistic is large, then the observed and expected values are not close and the model is a poor fit to the data. 
+$$\chi^2 = \sum \frac{(\text{observed} - \text{expected})^2}{\text{expected}}$$ Chi-square goodness of fit statistics can be used to compare different models. If the computed test statistic is large, then the observed and expected values are not close and the model is a poor fit to the data.
 
 # Reference
