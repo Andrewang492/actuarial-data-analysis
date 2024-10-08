@@ -1,0 +1,320 @@
+---
+title: "Robert's Severity"
+author: "Robert"
+date: "2024-10-08"
+output: 
+  bookdown::pdf_book:
+    keep_tex: false
+    number_sections: yes
+    toc: false
+biblio-style: apalike
+link-citations: yes
+colorlinks: true
+fontsize: 10pt
+fig_caption: yes
+linestretch: 1
+geometry: margin=2.3cm
+classoption: oneside
+graphics: yes
+fontfamily: mathpazo
+header-includes:
+  - \usepackage{float}
+  - \usepackage{booktabs}
+  - \usepackage{multicol}
+  - \floatplacement{figure}{H}
+  - \usepackage[table]{xcolor}
+  - \usepackage{amsmath}
+  - \usepackage{bm}
+  - \usepackage{mdframed}
+  - |
+    \newmdenv[
+      topline=true,
+      bottomline=true,
+      rightline=true,
+      leftline=true,
+      linewidth=1pt,
+      roundcorner=5pt,
+      backgroundcolor=white,
+      linecolor=black,
+      font=\normalfont
+    ]{taskbox}
+---
+
+# Severity Modelling and Feature Selection
+
+Here we look into how we can model the severity of the claims per claim ID and know how to
+
+### Libraries
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(glmnet)
+```
+
+### Importing Data
+
+```{r}
+
+# Claims data
+claims_data <- read_csv("Data/UNSW_claims_data.csv")
+
+# Skipping first column which is just numbers
+earned_data <- read_csv("Data/UNSW_earned_data_adjusted_Sep27.csv")[,-1]
+
+# Changing claim status and condition category to factors
+claims_data <- claims_data %>%
+  mutate(
+    claim_status = as.factor(claim_status),
+    condition_category = as.factor(condition_category)
+  )
+
+# Changing variables to factors
+earned_data <- earned_data %>%
+  mutate(across(
+    c(pet_gender, pet_de_sexed_age, nb_address_type_adj, nb_suburb, nb_postcode,
+      nb_state, pet_age_years, nb_breed_type, nb_breed_trait),
+    as.factor
+  ))
+```
+
+On top of having the data imported here we also want to convert some of the data into factor instead of factor in order to allow for it to be used in modelling.
+
+### Claims Data Preparation
+
+```{r}
+# Delete duplicate rows
+claims_data %>% nrow() # 3487
+claims_data %>% distinct() %>% nrow() # 3474
+claims_data <- claims_data %>% distinct()
+
+# There can be multiple rows with the same claim ID
+# This occurs when the claim involves more than one condition category (Ingestion and Eyes and Ears etc)
+# 465 claim IDs occuring more than once
+claims_data %>%
+  group_by(claim_id) %>%          
+  filter(n() > 1) %>%
+  arrange(claim_id)
+
+# But (claim_id, condition_category)is also not unique
+# 58 rows with the same (claim_id, condition_category)
+claims_data %>%
+  count(claim_id, condition_category) %>% 
+  filter(n > 1) %>%
+  nrow()
+
+claims_data %>% group_by(claim_id, exposure_id, condition_category) %>% nrow()
+claims_data %>% group_by(claim_id) %>% nrow()
+
+# We should aggregate claim amounts for rows with same (claim_id, condition_category)
+claims_data <- claims_data %>%
+  group_by(across(-c(claim_paid, total_claim_amount))) %>%
+  summarise(claim_paid = sum(claim_paid),
+            total_claim_amount = sum(total_claim_amount))
+
+# Check that (claim_id, condition_category)is unique
+claims_data %>%
+  count(claim_id, condition_category) %>% 
+  filter(n > 1) %>%
+  nrow()
+
+# A claim ID can have multiple condition categories, we need to use one hot encoding
+# for the condition categories
+# TEMPORARILY GETTING RID OF THIS ENCODING
+# encoded_conditions <- claims_data %>%
+#   dplyr::select(-c(claim_paid, total_claim_amount)) %>%
+#   mutate(value = 1, condition_category=paste0("condition_", condition_category)) %>%
+#   pivot_wider(names_from = condition_category, values_from = value, values_fill = list(value = 0))
+# 
+# encoded_conditions %>% count(claim_id) %>% filter(n > 1) %>% nrow()
+
+# claims_data <- claims_data %>% 
+#   group_by(claim_id) %>%
+#   summarise(claim_paid = sum(claim_paid),
+#             total_claim_amount = sum(total_claim_amount)) %>% 
+#   left_join(encoded_conditions, by="claim_id")
+
+# We have aggregated by claim ID, each claim ID only appears once now
+claims_data %>% count(claim_id) %>% filter(n > 1) %>% nrow()
+claims_data
+```
+
+### Earned Data Preparation
+
+#### Breed Data
+
+```{r}
+# Differences nb_breed_name_unique and nb_breed_name_unique_concat
+head(earned_data %>% filter(nb_breed_name_unique != nb_breed_name_unique_concat))
+
+# nb_breed_trait has alot of NA's but nb_breed_name_unique doesn't 
+# nb_breed_name_unique_concat would be too difficult to encode (one hot encoding)
+# probably best to use nb_breed_name_unique
+sum(is.na(earned_data$nb_breed_trait))
+sum(is.na(earned_data$nb_breed_name_unique))
+sum(is.na(earned_data$nb_breed_name_unique_concat))
+
+# But `nb_breed_name_unique` has a lot of breeds which only occur once or twice...
+# We don't have a lot of data about these breeds...
+earned_data %>% 
+  count(nb_breed_name_unique)
+
+# Find well known breeds
+well_known_breeds <- earned_data %>% 
+  count(nb_breed_name_unique) %>% 
+  filter(n > 100) %>%
+  pull(nb_breed_name_unique)
+
+# Breeds that are not well known should just be categorised as `other`
+earned_data <- earned_data %>% mutate(
+  breed = ifelse(nb_breed_name_unique %in% well_known_breeds, nb_breed_name_unique, "Other")
+)
+
+# Check the new distribution of breeds
+earned_data %>% 
+  count(breed)
+
+# Visualisation of points made above
+ggplot(earned_data, aes(x = nb_breed_name_unique)) +
+  geom_bar(fill = "#6750a4") +  # Use your preferred color
+  labs(title = "Count of Breeds",
+       x = "Breed",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# Still very uneven distribution in breeds...this could be a problem
+ggplot(earned_data, aes(x = breed)) +
+  geom_bar(fill = "#6750a4") +  # Use your preferred color
+  labs(title = "Count of Breeds",
+       x = "Breed",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+#### Aggregation of Earned Units
+
+```{r}
+# Only show one row for each exposure ID, getting the max tenure (time from inception to now) and aggregate earned units
+clean_earned_data <- earned_data %>%
+  dplyr::select(-c(row_num, exposure_id_1)) %>% 
+  filter(tenure >= 0) %>%
+  group_by(across(-c(tenure, earned_units, UW_Date))) %>%
+  summarise(
+    max_tenure = max(tenure),
+    total_earned_units = sum(earned_units),
+    claimNb = n()
+  )
+
+clean_earned_data %>% count(exposure_id) %>% filter(n > 1) %>% nrow()
+```
+
+### Merging Data
+
+```{r}
+# Merge claims and exposure data, only including rows with matching exposure_id in both tibbles
+merged <- claims_data %>% 
+  left_join(clean_earned_data, by = "exposure_id") %>% 
+  filter(total_earned_units > 0.01)
+merged
+```
+
+### Modelling - Shrinkage Techniques
+
+```{r}
+# The data that we are looking at is merged
+# Splitting data 
+index <- sample(1:length(merged$claim_id), 0.7*length(merged$claim_id))
+
+# Removing the columns that are mainly NA
+merged_remove_NA <- merged[, -c(4, 6, 11, 12)]
+
+# Imputing the other NA data
+# merged_remove_NA$pet_de_sexed_age[is.na(merged_remove_NA$pet_de_sexed_age)] <- "none"
+merged_remove_NA$nb_breed_trait[is.na(merged_remove_NA$nb_breed_trait)] <- "unknown"
+merged_remove_NA$person_dob[is.na(merged_remove_NA$person_dob)] <- mean(merged_remove_NA$person_dob, na.rm = TRUE)
+merged_remove_NA$owner_age_years[is.na(merged_remove_NA$owner_age_years)] <- mean(merged_remove_NA$owner_age_years, na.rm = TRUE)
+
+
+# Preparing data
+x_train <- merged_remove_NA[index, -6] # all independent variables in the training set
+y_train <- merged_remove_NA[index, 6] # the dependent variable "default" in the training set
+Data_train <- merged_remove_NA[index,] # X and Y
+
+x_test <- merged_remove_NA[-index, -6] # all independent variables in the test set
+y_test <- merged_remove_NA[-index, 6] # the dependent variables in the test set
+Data_test <- merged_remove_NA[-index,] # X and Y
+
+x_train_matrix <- model.matrix(~., x_train)
+#model.matrix(): create a matrix and expand factors to a set of dummy variables
+y_train_matrix <- as.matrix(y_train)
+#Note the test set should NOT be used in the model building process.
+x_test_matrix <- model.matrix(~., x_test)
+y_test_matrix <- as.matrix(y_test)
+
+# Lasso Selection 
+CV_lasso <- cv.glmnet(x_train_matrix, y_train_matrix, family="gaussian", type.measure = "auc", alpha = 1, nfolds = 10)
+
+# Ridge Selection
+CV_ridge <- cv.glmnet(x_train_matrix, y_train_matrix, family="gaussian", type.measure = "auc", alpha = 0, nfolds = 10)
+
+# Elastic Selection
+CV_elastic_0.5 <- cv.glmnet(x_train_matrix, y_train_matrix, family="gaussian", type.measure = "auc", alpha = 0.5, nfolds = 10)
+
+CV_lasso
+CV_ridge
+CV_elastic_0.5
+
+plot(CV_lasso)
+plot(CV_ridge)
+plot(CV_elastic_0.5)
+```
+
+#### Plotting the Lambda for the Shrinkage Techniques
+
+```{r}
+plot(CV_lasso$glmnet.fit, xvar = "lambda",main="Lasso")
+plot(CV_ridge$glmnet.fit, xvar = "lambda",main="Ridge")
+plot(CV_elastic_0.5$glmnet.fit, xvar = "lambda",main="Elasticnet")
+```
+
+#### Making Predictions using the shrinkage techniques
+
+```{r}
+# First Dealing with the missing values
+missing_columns <- setdiff(colnames(x_train_matrix), colnames(x_test_matrix))
+
+zero_matrix <- matrix(0, nrow = nrow(x_test_matrix), ncol = length(missing_columns))
+colnames(zero_matrix) <- missing_columns
+
+x_test_matrix <- cbind(x_test_matrix, zero_matrix)
+
+# Ensure columns are in the same order as in the training data
+x_test_matrix <- x_test_matrix[, colnames(x_train_matrix)]
+
+
+
+prediction_lasso <- predict(CV_lasso, s=CV_lasso$lambda.min, newx=x_test_matrix, type="response")
+
+prediction_ridge <- predict(CV_ridge, s=CV_ridge$lambda.min, newx=x_test_matrix, type="response")
+
+prediction_EN <- predict(CV_elastic_0.5, s=CV_elastic_0.5$lambda.min, newx=x_test_matrix, type="response")
+```
+
+```{r}
+ROC_lasso <- PRROC::roc.curve(scores.class0 = prediction_lasso,
+                            weights.class0 = as.numeric(Data_test$default)-1,curve = T)
+
+ROC_ridge <- PRROC::roc.curve(scores.class0 = prediction_ridge,
+                            weights.class0 = as.numeric(Data_test$default)-1,curve = T)
+
+ROC_EN <- PRROC::roc.curve(scores.class0 = prediction_EN,
+                         weights.class0 = as.numeric(Data_test$default)-1,curve = T)
+
+plot(ROC_lasso,color = "brown", main="ROC curves", auc.main = F, lwd=2)
+plot(ROC_ridge,color ="blue",add=T, lwd=2)
+plot(ROC_EN,color ="red",add=T, lwd=2)
+legend("bottomright", legend = c("Lasoo", "Ridge","EN"),
+       lwd = 3, col = c("brown", "blue","red"))
+```

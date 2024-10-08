@@ -1,0 +1,225 @@
+---
+title: "Claims"
+author: "Jayden Ly"
+date: "2024-10-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data Cleaning
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+
+claims_data <- read_csv("Data/UNSW_claims_data.csv")
+
+#Skipping first column which is just numbers
+earned_data <- read_csv("Data/UNSW_earned_data_adjusted_Sep27.csv")[,-1]
+
+# Changing claim status and condition category to factors
+claims_data <- claims_data %>%
+  mutate(
+    claim_status = as.factor(claim_status),
+    condition_category = as.factor(condition_category)
+  )
+
+#Changing variables to factors
+earned_data <- earned_data %>%
+  mutate(across(
+    c(pet_gender, pet_de_sexed_age, nb_address_type_adj, nb_suburb, nb_postcode,
+      nb_state, pet_age_years, nb_breed_type, nb_breed_trait),
+    as.factor
+  ))
+```
+# Claims Data Preparation
+
+```{r}
+# Delete duplicate rows
+claims_data %>% nrow() # 3487
+claims_data %>% distinct() %>% nrow() # 3474
+claims_data <- claims_data %>% distinct()
+
+# There can be multiple rows with the same claim ID
+# This occurs when the claim involves more than one condition category (Ingestion and Eyes and Ears etc)
+# 465 claim IDs occuring more than once
+claims_data %>%
+  group_by(claim_id) %>%          
+  filter(n() > 1) %>%
+  arrange(claim_id)
+
+# But (claim_id, condition_category)is also not unique
+# 58 rows with the same (claim_id, condition_category)
+claims_data %>%
+  count(claim_id, condition_category) %>% 
+  filter(n > 1) %>%
+  nrow()
+
+claims_data %>% group_by(claim_id, exposure_id, condition_category) %>% nrow()
+claims_data %>% group_by(claim_id) %>% nrow()
+
+# We should aggregate claim amounts for rows with same (claim_id, condition_category)
+claims_data <- claims_data %>%
+  group_by(across(-c(claim_paid, total_claim_amount))) %>%
+  summarise(claim_paid = sum(claim_paid),
+            total_claim_amount = sum(total_claim_amount))
+
+# Check that (claim_id, condition_category)is unique
+claims_data %>%
+  count(claim_id, condition_category) %>% 
+  filter(n > 1) %>%
+  nrow()
+
+# A claim ID can have multiple condition categories, we need to use one hot encoding
+# for the condition categories
+encoded_conditions <- claims_data %>%
+  dplyr::select(-c(claim_paid, total_claim_amount)) %>%
+  mutate(value = 1, condition_category=paste0("condition_", condition_category)) %>%
+  pivot_wider(names_from = condition_category, values_from = value, values_fill = list(value = 0))
+
+encoded_conditions %>% count(claim_id) %>% filter(n > 1) %>% nrow()
+
+claims_data <- claims_data %>% 
+  group_by(claim_id) %>%
+  summarise(claim_paid = sum(claim_paid),
+            total_claim_amount = sum(total_claim_amount)) %>% 
+  left_join(encoded_conditions, by="claim_id")
+
+# We have aggregated by claim ID, each claim ID only appears once now
+claims_data %>% count(claim_id) %>% filter(n > 1) %>% nrow()
+View(claims_data)
+```
+# Earned Data Preparation
+
+## Dealing with breeds
+
+```{r}
+# Differences nb_breed_name_unique and nb_breed_name_unique_concat
+head(earned_data %>% filter(nb_breed_name_unique != nb_breed_name_unique_concat))
+
+# nb_breed_trait has alot of NA's but nb_breed_name_unique doesn't 
+# nb_breed_name_unique_concat would be too difficult to encode (one hot encoding)
+# probably best to use nb_breed_name_unique
+sum(is.na(earned_data$nb_breed_trait))
+sum(is.na(earned_data$nb_breed_name_unique))
+sum(is.na(earned_data$nb_breed_name_unique_concat))
+
+# But `nb_breed_name_unique` has a lot of breeds which only occur once or twice...
+# We don't have a lot of data about these breeds...
+earned_data %>% 
+  count(nb_breed_name_unique)
+
+# Find well known breeds
+well_known_breeds <- earned_data %>% 
+  count(nb_breed_name_unique) %>% 
+  filter(n > 100) %>%
+  pull(nb_breed_name_unique)
+
+# Breeds that are not well known should just be categorised as `other`
+earned_data <- earned_data %>% mutate(
+  breed = ifelse(nb_breed_name_unique %in% well_known_breeds, nb_breed_name_unique, "Other")
+)
+
+# Check the new distribution of breeds
+earned_data %>% 
+  count(breed)
+
+# Visualisation of points made above
+ggplot(earned_data, aes(x = nb_breed_name_unique)) +
+  geom_bar(fill = "#6750a4") +  # Use your preferred color
+  labs(title = "Count of Breeds",
+       x = "Breed",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# Still very uneven distribution in breeds...this could be a problem
+ggplot(earned_data, aes(x = breed)) +
+  geom_bar(fill = "#6750a4") +  # Use your preferred color
+  labs(title = "Count of Breeds",
+       x = "Breed",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+## Aggregation of Earned Units
+
+```{r}
+# Only show one row for each exposure ID, getting the max tenure (time from inception to now)
+# and aggregate earned units
+clean_earned_data <- earned_data %>%
+  dplyr::select(-c(row_num, exposure_id_1)) %>% 
+  filter(tenure >= 0) %>%
+  group_by(across(-c(tenure, earned_units, UW_Date))) %>%
+  summarise(
+    max_tenure = max(tenure),
+    total_earned_units = sum(earned_units),
+    claimNb = n()
+  )
+
+clean_earned_data %>% count(exposure_id) %>% filter(n > 1) %>% nrow()
+```
+
+# Merged Data
+```{r}
+# Merge claims and exposure data, only including rows with matching exposure_id in both tibbles
+merged <- claims_data %>% 
+  left_join(clean_earned_data, by = "exposure_id") %>% 
+  filter(total_earned_units > 0.01)
+View(merged)
+```
+
+# Simple Gamma GLM for Severity
+```{r}
+sev_model_data <- merged %>% 
+  dplyr::select(c(total_claim_amount, tenure, pet_gender,  pet_de_sexed, pet_de_sexed_age,pet_age_months  , nb_contribution,  nb_excess, , owner_age_years , claimNb)) %>%
+  filter(total_claim_amount > 0)
+# sev_model_data <- na.omit(sev_model_data)
+summary(sev_model_data)
+
+formula_str <- "total_claim_amount ~ . + offset(claimNb)"
+glm_formula <- as.formula(formula_str)
+
+sevGamma_full  <- glm(glm_formula,
+                       data = sev_model_data, 
+                       family = Gamma(link = "log"))
+summary(sevGamma_full)
+```
+# Example of One Hot Encoding
+
+```{r}
+# Example of one-hot-encoding
+
+# Sample data frame
+dog_data <- data.frame(
+  dog_id = c(1, 1, 2, 2),
+  breed = c("rottweiler", "german shepherd", "retriever", "rottweiler"),
+  cost = c(1, 2, 2, 4)
+)
+
+# One-hot encoding
+dog_one_hot <- dog_data %>%
+  mutate(value = 1) %>%  # Create a value column to fill 1s
+  pivot_wider(names_from = breed, values_from = value, values_fill = list(value = 0)) %>%
+  dplyr::select(dog_id, everything())  # Arrange columns to keep dog_id first
+
+
+dog_one_hot <- dog_data %>%
+  group_by(dog_id) %>%
+  summarize(total_cost = sum(cost), .groups = 'drop') %>%  # Aggregate cost
+  left_join(dog_data %>%
+              mutate(value = 1) %>%  # Create a value column to fill 1s
+              dplyr::select(dog_id, breed, value), by = "dog_id") %>%  # Join to get breeds
+  pivot_wider(names_from = breed, values_from = value, values_fill = list(value = 0)) %>%
+  dplyr::select(dog_id, total_cost, everything())
+
+
+
+# View the resulting data frame
+print(dog_one_hot)
+```
+
