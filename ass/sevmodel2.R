@@ -1,3 +1,8 @@
+library(tidyverse)
+library(ggplot2)
+library(lubridate)
+library(MASS) #stepAIC and glm.nb()
+library(ggcorrplot)
 merged <- read_csv("Data/merged.csv")
 
 merged <- merged %>% mutate(across(

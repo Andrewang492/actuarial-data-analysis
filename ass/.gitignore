@@ -1,2 +1,4 @@
 UNSW_claims_data.csv
 UNSW_earned_data_adjusted_Sep27.csv
+.RData
+Data/merged.csv
