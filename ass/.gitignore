@@ -1,4 +1,8 @@
-UNSW_claims_data.csv
-UNSW_earned_data_adjusted_Sep27.csv
+Data/UNSW_claims_data.csv
+Data/UNSW_earned_data_adjusted_Sep27.csv
 .RData
+Data/ABS_SA_Data
 Data/merged.csv
+Data/Postcode SA Mapping
+
+05-Goldburd-Khare-Tevet.pdf

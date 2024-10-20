@@ -1,0 +1,618 @@
+---
+title: "ACTL4305/5305 Actuarial Data Analytic Application"
+author: "Week 7: Random Forest"
+output: 
+  bookdown::pdf_book:
+     keep_tex: false
+header-includes:
+  - \usepackage{subfig}
+bibliography: [reference.bib]
+biblio-style: apalike
+link-citations: yes
+colorlinks: true
+fontsize: 10pt
+toc: False
+lof: False
+lot: False
+fig_caption: yes
+linestretch: 1
+geometry: margin=2.3cm
+classoption: oneside
+number_sections: no
+graphics: yes
+description: "Credit Risk Modeling"
+fontfamily: mathpazo
+includes:
+- \usepackage{booktabs}
+- \usepackage{multicol}
+- \floatplacement{figure}{H}
+- \usepackage[table]{xcolor}
+- \usepackage{amsmath}
+- \usepackage{bm}
+- \usepackage{longtable}
+- \usepackage{array}
+- \usepackage{multirow}
+- \usepackage{wrapfig}
+- \usepackage{float}
+- \usepackage{colortbl}
+- \usepackage{pdflscape}
+- \usepackage{tabu}
+- \usepackage{threeparttable} 
+- \usepackage{threeparttablex} 
+- \usepackage[normalem]{ulem} 
+- \usepackage{makecell}
+- \usepackage{animate}
+- \usepackage{caption}
+- \captionsetup[figure]{font=7pt}
+---
+
+# Learning Objectives {.unnumbered}
+
+In this tutorial, we use the credit data of the credit card clients in Taiwan to predict if a client will default or not. The data set is the customers' default payments which include $30000$ instances described over 24 attributes. This dataset contains information on default payments, demographic factors, credit data, history of payment, and bill statements of credit card clients in Taiwan from April 2005 to September 2005. The risk involved in lending business or credit card can be the business loss by not approving the good client or financial loss by approving the client who is at bad risk.
+
+-   We use the tree-based methods namely the classification trees, Bagging, and Random Forest (RF) to predict the creditworthiness of the client.
+
+-   We introduce the basic implementation of classification trees in R and explore the tuning process, which involves understanding the hyperparameters that can be adjusted for each method and performing grid or random searches.
+
+-   We explore two methods for assessing feature importance.
+
+For illustrative purposes, we will work with a subset of 1000 observations, as running these methods on the complete dataset could be time-consuming. However, we encourage you to explore the full dataset or a larger sample after the lab to facilitate comprehensive result comparison.
+
+```{r  warning= FALSE, message = FALSE, echo = TRUE}
+
+# load packages 
+
+library(dplyr)
+library(randomForest) 
+library(caret) 
+library(pROC)
+library(ROCR)
+library(tidyr)
+library(PRROC) #roc.curve
+library(ranger)
+
+# load data 
+
+credit <- read.csv("credit.csv")%>% dplyr::select(-X, -ID)
+
+payamt_colsnames <- paste0("PAY_", c(1, 2:6))
+
+credit <- credit%>%dplyr::mutate_at(vars(EDUCATION, MARRIAGE,SEX, default, 
+                                         payamt_colsnames), funs(factor))
+
+credit$default <- as.factor(ifelse(credit$default == 1, "Yes", "No"))
+#Extract a sample from the training set to speed up the computation
+credit_full <- credit #save the full dataset
+set.seed(310)
+credit <- credit[sample(nrow(credit),size = 1000, replace = FALSE),]
+
+# reproduciblity
+
+set.seed(123)
+
+# data splitting
+
+index <- createDataPartition(credit$default, p = 0.7, list = FALSE) 
+train <- credit[index, ]; test <- credit[-index, ]
+```
+
+# Classification Metrics
+
+## Area under the curve
+
+We use the area under the receiver operating characteristic curve ($\text{AUC}$) to evaluate the models implemented in this case study. The receiver operating characteristic curve (ROC curve) is a graph showing the performance of a classification model at all classification thresholds. This curve plots two parameters namely true positive rate and false-positive rate. Lowering the classification threshold classifies more items as positive, thus increasing both False Positives and True Positives. $\text{AUC}$ measures the entire two-dimensional area underneath the entire ROC curve from $(0,0)$ to $(1,1)$. The higher the AUC, the better the model is at predicting non-defaulters and defaulters.
+
+## Confusion Matrix
+
+A confusion matrix provides a summary of the predictive results in a classification problem. True Positive ($\text{TP}$) is when one predicts a positive and it's true, True Negative ($\text{TN}$) is when one predicts a negative and it's true, False Positive $\text{FP}$ is when one predicts positive, and it's false, and False Negative $\text{FN}$ is when one predicts a negative and it's false.
+
+### Classification Accuracy
+
+Classification Accuracy is given by the relation:
+
+$$\text{Accuracy} = \frac{\text{TP} +\text{TN} }{\text{TP} +\text{TN} + \text{FP} + \text{FN}}.$$
+
+### Recall (Sensitivity)
+
+Recall is defined as the ratio of the total number of correctly classified positive classes divide by the total number of positive classes. Recall should be high and it is given by:
+
+$$\text{Recall} = \frac{\text{TP}}{\text{TP} + \text{FN}}.$$
+
+### Precision
+
+Precision is defined as the ratio of the total number of correctly classified positive classes divided by the total number of predicted positive classes. Precision should be high and it is given by:
+
+$$\text{Precision} = \frac{\text{TP}}{\text{TP} + \text{FP}}.$$
+
+### F-score
+
+F-Score is the Harmonic Mean of Precision and Recall. As compared to Arithmetic Mean, Harmonic Mean punishes the extreme values more. F-score should be high and it is given by:
+
+$$\text{F-score} = \frac{2 \times \text{Recall} \times \text{Precision}}{\text{Recall} + \text{Precision}}.$$
+
+We can look at the results from training the model and choosing the best parameter by returning the fitted model.
+
+# Tree-Based Methods
+
+Tree-based methods can be used for regression and classification. They involve stratifying the predictor space into several simple regions. To predict a given observation, we typically use the mean or the mode of the training observations in the region to which it belongs. Since the set of splitting rules used to segment the predictor space can be summarized in a tree, these types of approaches are known as decision tree methods. Tree-based methods are simple and useful for interpretation. In this tutorial, we consider three tree-based methods namely classification trees, Bagging, and Random Forest (RF).
+
+```{r trainctrl, echo=TRUE, message=FALSE, warning=FALSE}
+#Define control parameters for train
+fitcontrol <- trainControl(method = "cv", 
+                           number = 5,
+                           savePredictions = TRUE,
+                           classProbs = TRUE, 
+                           summaryFunction = twoClassSummary,
+                           allowParallel = TRUE)
+```
+
+The `trainControl` function generates parameters that further govern how models are constructed, offering a range of possible values. The following key parameters are available:
+
+-   `method`: This parameter determines the resampling method to be used. Options include "boot", "cv", "LOOCV", "LGOCV", "repeatedcv", "timeslice", "none", and "oob". In this week's lab, we use cross validation (cv) method.
+
+-   `number` and `repeats`: The `number` parameter controls the number of folds in K-fold cross-validation or the number of resampling iterations for bootstrapping and leave-group-out cross-validation. The `repeats` parameter is applicable only to repeated K-fold cross-validation. For instance, if `method = "repeatedcv"`, `number = 10`, and `repeats = 5`, the resampling scheme employs five separate 10-fold cross-validations.
+
+For the purposes of this illustration, we will use a 5-fold cross-validation scheme.
+
+## Decision Trees
+
+A classification tree is used to predict a qualitative response whereby we predict that each observation belongs to the most commonly occurring class of training observations in the region to which it belongs. In interpreting the results of a classification tree, we are often interested not only in the class prediction corresponding to a particular terminal node region but also in the class proportions among the training observations that fall into that region.
+
+If there is a highly non-linear and complex relationship between the features and the response, then decision trees may outperform classical approaches. Trees are very easy to explain to people, i.e., they are even easier to explain than linear regression and trees can easily handle qualitative predictors without the need to create dummy variables. Unfortunately, trees generally do not have the same level of predictive accuracy as some of the other regression and classification approaches. Also, decision trees can be very non-robust. In other words, even a small change in the data can lead to different features and thresholds being chosen for the splits, which can propagate through the rest of the tree-building process, leading to a substantially different final tree (this is a reason why ensemble methods like bagging and random forests are popular, think about it:)).
+
+```{r tree1, echo=TRUE, message=FALSE, warning=FALSE,fig.width=5, fig.height=3, fig.align='center'}
+####Decision Tree 1####
+#CP tuning based Decision Tree
+set.seed(319)
+tree1 <- train(default ~., data = train, method = "rpart", metric = "ROC",
+              trControl = fitcontrol, tuneLength = 10)
+# tree1 <- train(default ~., data = train, method = "rpart", 
+#               trControl = fitcontrol, tuneGrid = expand.grid(cp = seq(0.001,0.005, 0.0005)))
+print(tree1)
+plot(tree1)
+#Note the threshold probability for the classification is 50% by default.
+tree1_pred <- predict(tree1, newdata = test[,-ncol(credit)], type = "raw") 
+tree1_conf <- confusionMatrix(tree1_pred,  test[,ncol(credit)], positive="Yes")
+
+tree1_probpred <- predict(tree1, newdata = test[,-ncol(credit)], type = "prob")
+tree1_auc <- roc.curve(scores.class0 = tree1_probpred$Yes, 
+                       weights.class0 = as.numeric(test$default)-1, curve = T)
+tree1_auc$auc
+```
+
+In this week's lab, we used the `train` function from the `caret` package to build predictive tree-based models. For an extensive list of models available within the `train` function, you can refer to the online book for [The caret Package](https://topepo.github.io/caret/available-models.html). To begin, we established a decision tree model using the `rpart` method, with the default tuning parameter in the `train` function being the `cp` (complexity parameter). `cp` acts as a threshold for pruning. Any split that does not decrease the overall lack of fit by a factor of `cp` is not attempted (i.e., the greater the `cp` value, the fewer the number of splits in the tree). The main role of this parameter is to save computing time by pruning off splits that are obviously not worthwhile.
+
+In the tuning process within the `train` function, we have two methods for selecting tuning or complexity parameters and building the final model.
+
+1.  **Specifying a Tuning Parameter Grid**: You can define a tuning parameter grid using the `tuneGrid` argument. This involves creating a data frame with columns corresponding to each tuning parameter. The column names should match the fitting function's arguments. By doing so, you comprehensively explore different parameter combinations to find the optimal setup for your model.
+
+2.  **Random Search**: Alternatively, you can opt for a random search approach. When using `trainControl`, the option `search = "random"` can be used (sometimes R can automatically handle this even if you don't explicitly define it). In this scenario, the `tuneLength` parameter defines the total number of parameter combinations that will be evaluated. This approach is particularly useful when you want to balance thorough exploration with computational efficiency.
+
+Based on the results above, it is evident that the CART model exhibits notably poor performance. Let's try another way of fitting a decision tree model.
+
+```{r tree2, echo=TRUE, message=FALSE, warning=FALSE, fig.width=5, fig.height=3, fig.align='center'}
+####Decision Tree 2####
+#Max tree depth tuning based Decision Tree
+set.seed(192)
+tree2 <- train(default ~., data = train, method = "rpart2", metric = "ROC",
+               trControl = fitcontrol, tuneLength = 10)
+
+print(tree2)
+plot(tree2)
+
+tree2_pred <- predict(tree2, newdata = test[,-ncol(credit)], type = "raw")
+tree2_conf <- confusionMatrix(tree2_pred,  test[,ncol(credit)], positive="Yes")
+
+tree2_probpred <- predict(tree2, newdata = test[,-ncol(credit)], type = "prob")
+tree2_auc <- roc.curve(scores.class0 = tree2_probpred$Yes, 
+                       weights.class0 = as.numeric(test$default)-1, curve = T)
+tree2_auc$auc
+```
+
+```{r treeplot, echo=TRUE, message=FALSE, warning=FALSE, fig.width=7, fig.height=5, fig.align='center'}
+library(rattle)
+
+#fancyRpartPlot(tree1$finalModel,palettes="RdPu") #For tree1
+fancyRpartPlot(tree2$finalModel,sub="",palettes="RdPu") #For tree2
+```
+
+The `rpart2` method optimizes the maximum tree depth parameter, effectively controlling the size of the tree. According to the tuning results shown earlier, the optimized model comprises three decision nodes: PAY_1, PAY_AMT1, and AGE. When compared to `tree1`, it becomes evident that this optimized model exhibits an improvement in fit.
+
+> **Question:** Before uncommenting the line and visualizing the first fitted decision tree `tree1`, take a guess: will it be more complex or simpler than `tree2`?
+
+## Bagging
+
+Bagging or bootstrap aggregation is an ensemble method that involves training the same algorithm many times by using different subsets sampled from the training data. Bagging is a technique that can turn a single tree model with high variance and poor predictive power into a fairly accurate prediction function. The final output prediction is then averaged across the predictions of all the sub-models.
+
+Bagging models provide several advantages over models that are not bagged. First, bagging effectively reduces the variance of a prediction through its aggregation process. For instance, for models that produce an unstable prediction, like regression trees, aggregating over many versions of the training data reduces the variance in the prediction and, hence, makes the prediction more stable. Another advantage of bagging models is that they can provide their internal estimate of predictive performance that correlates well with either cross-validation estimates or test set estimates. This is because when constructing a bootstrap sample for each model in the ensemble, certain samples are left out. These samples are called out-of-bag, and they can be used to assess the predictive performance of that specific model since they were not used to build the model. Hence, every model in the ensemble generates a measure of predictive performance courtesy of the out-of-bag samples. The average of the out-of-bag performance metrics can then be used to gauge the predictive performance of the entire ensemble, and this value usually correlates well with the assessment of predictive performance we can get with either cross-validation or from a test set. This error estimate is usually referred to as the out-of-bag estimate.
+
+Although bagging usually improves predictive performance for unstable models, there are a few caveats. First, computational costs and memory requirements increase as the number of bootstrap samples increases. This disadvantage can be mostly mitigated if the modeler has access to parallel computing because the bagging process can be easily parallelized. Recall that each bootstrap sample and corresponding model is independent of any other sample and model. This means that each model can be built separately and all models can be brought together in the end to generate the prediction. Another disadvantage to this approach is that a bagged model is much less interpretable than a model that is not bagged.
+
+```{r bag1, echo=TRUE, message=FALSE, warning=FALSE}
+####Bagging####
+set.seed(643)
+bag <- train(default ~., data = train, method = "treebag", metric = "ROC",
+             trControl = fitcontrol)
+print(bag)
+
+bag_pred <- predict(bag, newdata = test[,-ncol(credit)], type = "raw")
+bag_conf <- confusionMatrix(bag_pred,  test[,ncol(credit)], positive="Yes")
+
+bag_probpred <- predict(bag, newdata =  test[,-ncol(credit)], type = "prob")
+bag_auc <- roc.curve(scores.class0 = bag_probpred$Yes, 
+                     weights.class0 = as.numeric(test$default)-1, curve = T)
+bag_auc$auc
+```
+
+We trained a bagged CART model using the `treebag` method. It's worth noting that, by default, there are no tuning parameters in `caret` specifically designed for the `treebag` method. However, you can tune a bagged CART by defining a hyperparameter grid using `expand.grid` function.
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# This code chunk won't be executed but will be displayed
+# Create hyperparameter grid... which is a dataframe
+tuning_grid <- expand.grid(
+  maxdepth = c(1, 3, 5, 8, 15),
+  minsplit = c(2, 5, 10, 15),
+  ROC = NA,
+  Sens = NA,
+  Spec = NA
+)
+
+# Execute full cartesian grid search...
+set.seed(761)
+
+for(i in seq_len(nrow(tuning_grid))) {
+
+  # Fit model for each hyperparameter combination...
+  fit <- train(default ~., data = train, method = "treebag", metric = "ROC",
+               trControl = fitcontrol,
+               maxdepth = tuning_grid$maxdepth[i],
+               minsplit = tuning_grid$minsplit[i])
+
+
+  # Save fit metrics from each model...
+  tuning_grid$ROC[i] <- fit$results$ROC
+  tuning_grid$Sens[i] <- fit$results$Sens
+  tuning_grid$Spec[i] <- fit$results$Spec
+}
+
+# Assess top 10 models...
+tuning_grid %>%
+  arrange(-ROC) %>%
+  head(10)
+
+best_ROC <- tuning_grid[tuning_grid$ROC == max(tuning_grid$ROC), ]
+```
+
+Please note that the provided R chunk won't execute during knitting. However, feel free to run it and experiment. In the `treebag` method, the hyperparameters are the same as those in the `rpart` method. Specifically, the `maxdepth` parameter represents the maximum depth of any node of the final tree, with the root node counted as depth 0. The `minsplit` parameter is the minimum number of observations that must exist in a node in order for a split to be attempted. In addition, the `minbucket` parameter, representing the minimum number of observations in a terminal node, is not being tuned in the above chunk.
+
+```{r bag2, echo=TRUE, message=FALSE, warning=FALSE}
+#Please update the following based on to the run of the previous R chunk
+best_ROC <- expand.grid(
+  maxdepth = 3, 
+  minsplit = 15
+)
+
+# Re-run model with best hyperparameters...
+set.seed(889)
+bag_best <- train(default ~., data = train, method = "treebag", metric = "ROC",
+                  trControl = fitcontrol,
+                  maxdepth = best_ROC$maxdepth,
+                  minsplit = best_ROC$minsplit)
+
+print(bag_best)
+
+bag_best_pred <- predict(bag_best, newdata = test[,-ncol(credit)], type = "raw")
+bag_best_conf <- confusionMatrix(bag_best_pred,  test[,ncol(credit)], positive="Yes")
+# setting positive as "Yes" is important, otherwise, you may get wrong a conclusion.
+
+bag_best_probpred <- predict(bag_best, newdata =  test[,-ncol(credit)], type = "prob")
+bag_best_auc <- roc.curve(scores.class0 = bag_best_probpred$Yes, 
+                          weights.class0 = as.numeric(test$default)-1, curve = T)
+bag_best_auc$auc
+```
+
+The optimal values for `maxdepth` and `minsplit` were determined to be 3 and 15 (see `best_ROC`), respectively. However, feel free to adjust the code by experimenting with different tuning grids, larger sample sizes, or even varying the seed. If you make any changes, make sure to update the code accordingly.
+
+When comparing the results presented above with the untuned case (the default of `treebag` in `train`), it's challenging to discern a substantial difference or improvement. In other words, the gain achieved by fine-tuning `maxdepth` and `minsplit` from their defaults appears to be minimal.
+
+## Random Forest
+
+Random Forest is an extension of bagged decision trees, where the samples of the training dataset are taken with replacement. The trees are constructed to reduce the correlation between individual decision trees. Random forests are a modification of bagging that builds a large collection of de-correlated trees and have become a very popular "out-of-the-box" learning algorithm that enjoys the good predictive performance. One of the great qualities of the random forest algorithm is that it is very easy to measure the relative importance of each feature on the prediction. One of the limitations of the random forest is the correlated features will be given equal or similar importance, but overall reduced importance compared to the same tree built without correlated counterparts.
+
+```{r rf, echo=TRUE, message=FALSE, warning=FALSE, fig.width=5, fig.height=3, fig.align='center'}
+####Random Forest####
+#rf <- train(default ~., data = train, method = "rf", trControl = fitcontrol, tuneLength = 10)
+set.seed(248)
+rf <- train(default ~., data = train, method = "rf", metric = "ROC",
+            trControl = fitcontrol, tuneGrid = expand.grid(mtry = seq(1,15,1)))
+print(rf)
+plot(rf)
+
+rf_pred <- predict(rf, newdata = test[,-ncol(credit)], type = "raw")
+rf_conf <- confusionMatrix(rf_pred,  test[,ncol(credit)], positive="Yes")
+
+rf_probpred <- predict(rf, newdata =  test[,-ncol(credit)], type = "prob")
+rf_auc <- roc.curve(scores.class0 = rf_probpred$Yes, 
+                    weights.class0 = as.numeric(test$default)-1, curve = T)
+rf_auc$auc
+```
+
+The `rf` method is sourced from the randomForest package. The tuning parameter is `mtry`, which represents the number of variables randomly sampled as candidates at each split. Note that the default values are different for classification (sqrt(p) where p is number of variables in x) and regression (p/3).
+
+```{r table, echo=FALSE, message=FALSE, warning=FALSE}
+#Find F-scores for each fitted model
+tree1_fscore <- (2*tree1_conf$byClass["Sensitivity"]*tree1_conf$byClass["Pos Pred Value"])/(tree1_conf$byClass["Sensitivity"] + tree1_conf$byClass["Pos Pred Value"])
+tree2_fscore <- (2*tree2_conf$byClass["Sensitivity"]*tree2_conf$byClass["Pos Pred Value"])/(tree2_conf$byClass["Sensitivity"] + tree2_conf$byClass["Pos Pred Value"])
+bag_fscore <- (2*bag_conf$byClass["Sensitivity"]*bag_conf$byClass["Pos Pred Value"])/(bag_conf$byClass["Sensitivity"] + bag_conf$byClass["Pos Pred Value"])
+best_bag_fscore <- (2*bag_best_conf$byClass["Sensitivity"]*bag_best_conf$byClass["Pos Pred Value"])/(bag_best_conf$byClass["Sensitivity"] + bag_best_conf$byClass["Pos Pred Value"])
+rf_fscore <- (2*rf_conf$byClass["Sensitivity"]*rf_conf$byClass["Pos Pred Value"])/(rf_conf$byClass["Sensitivity"] + rf_conf$byClass["Pos Pred Value"])
+
+# Create a data frame to store the results
+model_comparison <- data.frame(
+  Model = c("Tree 1", "Tree 2", "Bagging", "Tuned Bagging","Random Forest"),
+  Accuracy = c(tree1_conf$overall['Accuracy'], tree2_conf$overall['Accuracy'], bag_conf$overall['Accuracy'], bag_best_conf$overall['Accuracy'], rf_conf$overall['Accuracy']),
+  AUC = c(tree1_auc$auc, tree2_auc$auc, bag_auc$auc, bag_best_auc$auc, rf_auc$auc),
+  Sensitivity = c(tree1_conf$byClass['Sensitivity'], tree2_conf$byClass['Sensitivity'], bag_conf$byClass['Sensitivity'], bag_best_conf$byClass['Sensitivity'], rf_conf$byClass['Sensitivity']),
+  Specificity = c(tree1_conf$byClass['Specificity'], tree2_conf$byClass['Specificity'], bag_conf$byClass['Specificity'], bag_best_conf$byClass['Specificity'], rf_conf$byClass['Specificity']),
+  F_score = c(tree1_fscore, tree2_fscore, bag_fscore, best_bag_fscore, rf_fscore)
+)
+
+# Print the data frame
+knitr::kable(model_comparison, caption = "Evaluation of different models using AUC, accuracy, sensitivity, specificity and F-score.")
+
+```
+
+Comparing the results in Table \ref{tab:table}, we observe that random forest and tuned bagging have strong predic tive performance compared to other models.
+
+# OOB and Test Set Error
+
+Both bagging and random forest have a natural benefit of the bootstrap resampling process which is an out-of-bag $(\text{OOB})$ sample that provides an efficient and reasonable approximation of the test error. This provides a built-in validation set without any extra work on your part, and you do not need to sacrifice any of your training data to use for validation. This makes identifying the number of trees required to stabilize the error rate during tuning more efficiently. However, as shown in Figure \ref{fig:oob} some difference between the OOB error and test error is expected.
+
+The `randomForest()` allows us to use a validation set to measure predictive accuracy if we did not want to use the OOB samples. Here we split our training set further to create a training and validation set. We then supply the validation data in the `xtest` and `ytest` arguments.
+
+```{r  oob, warning= FALSE, message = FALSE, fig.pos= "!ht", out.extra = '', echo = TRUE, fig.cap='Random forest out-of-bag error versus validation error.', out.width="100%", out.height="60%", fig.align='center', fig.show='hold'}
+
+# create training and validation data 
+
+set.seed(123)
+
+index <- createDataPartition(train$default, p = 0.75, list = FALSE) 
+
+# train & validation sets
+
+trainv <- train[index, ]; validv <- train[-index, ]
+
+# random forest 
+
+random_oob <- randomForest(formula = default ~., data = trainv, xtest = validv[,-24], 
+                           ytest   = validv$default, mtry = 7) #use optimal mtry
+
+# ntree=500 by default, Number of trees to grow. 
+# This should not be set to too small a number, to ensure that every input row 
+# gets predicted at least a few times.
+
+# extract OOB & validation errors
+oob <- random_oob$err.rate[,1]
+validation <- random_oob$test$err.rate[,1]
+
+# compare error rates
+tibble::tibble(`Out of Bag Error` = oob, `Test error` = validation,
+  ntrees = 1:random_oob$ntree)%>%gather(Metric, Error, -ntrees) %>%
+  ggplot(aes(ntrees, Error, color = Metric)) +  geom_line() + 
+  xlab("Number of trees")
+
+```
+
+We can identify the number of trees providing the lowest error rate from Figure \ref{fig:oob}, which is `r {which.min(random_oob$err.rate[,1])}` trees providing an average error of `r {random_oob$err.rate[,1][which.min(random_oob$err.rate[,1])]}`.
+
+> **Question:** As an alternative, consider modifying the code to use the entire dataset. Implement this change and then explain any differences that arise as a result.
+
+# Feature Importance
+
+When training tree methods, it is possible to compute how much each feature decreases the impurity. The more a feature decreases the impurity, the more important the feature is. In random forests, the impurity decrease from each feature can be averaged across trees to determine the final importance of the variable. We select the features from the train set and then transfer the changes to the test set. Therefore, this step aims to find the subset of features that will be relevant for the analysis, as irrelevant features cause drawbacks like increased runtime, complex patterns, etc. This resultant subset of features should give the same results as the original dataset. The proposed method picks a random object from the observations and generates several trees, and based on the accuracy of the classifier or error ratio, features are weighted. To features importance is presented in Figure \ref{fig:feature}. The features at the top in Figure \ref{fig:feature} are generally more important than those at the bottom.
+
+## Mean decrease impurity
+
+The random forest consists of several decision trees. Every node in the decision trees is a condition on a single feature, designed to split the dataset into two so that similar response values end up in the same set. The measure based on the (locally) optimal condition is called impurity. For classification, it is typically either Gini impurity or information gain/entropy, and for regression trees, it is variance. Thus when training a tree, it can be computed how much each feature decreases the weighted impurity in a tree. For a forest, the impurity decrease from each feature can be averaged, and the features are ranked according to this measure.
+
+## Mean decrease accuracy
+
+Another popular feature selection method is to directly measure the impact of each feature on accuracy of the model. The general idea is to permute the values of each feature and measure how much the permutation decreases the accuracy of the model. Clearly, for unimportant variables, the permutation should have little to no effect on model accuracy, while permuting important variables should significantly decrease it. MeanDecreaseAccuracy represents how much removing each variable reduces the accuracy of the model.
+
+Therefore, the higher the value of mean decrease accuracy or mean decrease Gini score, the higher the importance of the variable in the model. Typically, you will not see the same variable importance order between the two options; however, you will often see similar variables at the top of the plots (and also at the bottom). Consequently, in Figure \ref{fig:feature}, we can comfortably state that there appears to be enough evidence to suggest one variable that stands out as most influential is the payment delay for one month.
+
+```{r feature, warning= FALSE, message = FALSE, echo = TRUE,  fig.pos= "!ht", out.extra = '', echo = TRUE, fig.cap='Feature Importance Using Randon Forest.', out.width="100%", out.height="60%", fig.align='center', fig.show='hold'}
+
+# random forest 
+
+rf <- randomForest(formula = default ~., data = train,  importance = TRUE)
+
+# Evaluate variable importance
+
+varImpPlot(rf, main = "Feature Importance")
+```
+
+**Limitations of Permutation Feature Importance**
+
+Permutation feature importance is a technique used to assess the importance of a feature by calculating the increase in a model's prediction error after randomly permuting that feature. Its primary advantage lies in its model-agnostic nature, which makes it applicable to a wide range of machine learning algorithms. However, it does come with several limitations, as outlined by the Society of Actuaries for actuaries [(SOA, 2021)](https://www.soa.org/495a47/globalassets/assets/files/resources/research-report/2021/interpretable-machine-learning.pdf).
+
+-   Permuting correlated features may result in the creation of unrealistic observations. This may result in bias in the feature importance metrics.
+
+-   Correlated features may have their importance reduced when they contain similar information.
+
+In Week 8, we will introduce another permutation-based interpretation method - partial dependence plots, which share similar limitations due to their permute-and-predict structure.
+
+## Retrain the Models with Selected Features
+
+After training a random forest, it is natural to ask which variables have the most predictive power. Variables with high importance are drivers of the outcome, and their values have a significant impact on the outcome values. By contrast, variables with low importance might be omitted from a model, making it simpler and faster to fit and predict.
+
+There is no clear rule on how many features can be selected based on the feature importance displaced in Figure \ref{fig:feature}. This is an important problem with feature selection using the random forest, it returns feature scores/importances rather than a finite feature set. Therefore, we can currently use the following approaches to guide us:
+
+-   choose the $k$ best attributes (fixed number defined).
+
+-   make a cutoff at the biggest difference in feature scores. All the features are ordered according to their score and a split is made at the largest difference between one score and the next lower (biggest loss in importance).
+
+Since there is no clear cutoff at the biggest difference in feature scores from Figure \ref{fig:feature}, we then consider (at least) the top $15$ important features to retrain the models. Therefore, we drop marriage, education, and sex. The number of important features can be chosen using the code:
+
+```{r train-trees0, warning= FALSE, message = FALSE, echo = TRUE}
+
+newtrain <- train%>%dplyr::select(-MARRIAGE, -EDUCATION, -SEX)
+newtest <-  test%>%dplyr::select(-MARRIAGE, -EDUCATION, -SEX)
+```
+
+# `ranger` -- A Faster Implementation of Random Forests
+
+In this section, we introduced the `ranger` package [@wright2015ranger], which provides a much faster implementation of random forests, particularly for large datasets. Most of the features available in the `randomForest` package are also available in `ranger`.
+
+Let's begin by comparing the runtime of `ranger` with `randomForest`:
+
+```{r}
+# Calculate mtry as the square root of the number of predictors p
+sqrt_p <- sqrt(ncol(credit_full) - 1)
+
+# Measure the execution time of randomForest
+system.time(
+  randomForest_time <- randomForest(
+    formula = default ~ ., 
+    data    = credit_full, 
+    ntree   = 500,
+    mtry    = sqrt_p
+  )
+)
+
+# Measure the execution time of ranger
+system.time(
+  ranger_time <- ranger(
+    formula   = default ~ ., 
+    data      = credit_full, 
+    num.trees = 500,
+    mtry      = sqrt_p
+  )
+)
+```
+
+We train the model on the full dataset, with `mtry` set to the square root of `p` (the default `mtry` for a classification task). The elapsed time represents the total execution time. The runtime of `ranger` is significantly faster! (Please rerun the above R chunk to see how much faster it is on your side.)
+
+```{r}
+set.seed(161)
+rf_full_ranger <- ranger(formula = default ~ ., data = credit_full, mtry = sqrt_p)
+
+print(rf_full_ranger)
+```
+
+By default, variable importance is not computed. You need to specify the importance measure directly in the `ranger` function. The available options include 'impurity' and 'permutation' (both of which are available in `randomForest`), as well as 'impurity_corrected' (a bias-corrected version of the impurity importance; see [Nembrini et al. 2018](https://academic.oup.com/bioinformatics/article/34/21/3711/4994791) for an explanation of 'impurity_corrected').
+
+We set `importance = "permutation"` and compare the permutation feature importance with the results from the `randomForest` fit.
+
+```{r}
+set.seed(161)
+rf_full_ranger <- ranger(formula = default ~ ., data = credit_full, mtry = sqrt_p, 
+                         importance = "permutation", scale.permutation.importance = TRUE)
+
+rf_full_randomForest <- randomForest(formula = default ~ ., data = credit_full, mtry = sqrt_p,
+                                     importance = TRUE)
+
+cbind(ranger = ranger::importance(rf_full_ranger),
+      rF = randomForest::importance(rf_full_randomForest)[,1])
+```
+
+They are roughly at the same level.
+
+# Imbalanced Data Problem
+
+The credit data we have is imbalanced. In week 3, we addressed this by using the upsampling method to equalize the number of defaulters with the number of non-defaulters. Subsampling methods can be broadly categorized into:
+
+1.  **Down-sampling**: This involves randomly sampling a dataset so that all classes have the same frequency as the minority class. This can be achieved using the `downSample` function from the `caret` package.
+
+2.  **Up-sampling**: randomly sampling (with replacement) the minority class to match the size of the majority class. This can be done using the `upSample` function from the `caret` package.
+
+3.  **Hybrid methods**: Techniques like SMOTE (from the `SMOTE` package) and ROSE (from the `ROSE` package) both down-sample the majority class and synthesize new data points for the minority class.
+
+In this week's lab, we introduce the Synthetic Minority Over-Sampling Technique (SMOTE) -- a popular technique recently for addressing imbalanced classification problems. The general idea of this method is to artificially generate new instances of the minority class using the nearest neighbors of these cases. Simultaneously, instances from the majority class are under-sampled, resulting in a more balanced dataset.
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# This code chunk won't be executed but will be displayed
+#First, let's check if you have the following three packages
+#library(zoo)
+#library(xts)
+#library(quantmod)
+#If you do not have the above three packages,
+#you  need to install them first.
+install.packages(c("zoo","xts","quantmod")) #You may need to install some dependency packages first
+#Now, you are able to install the DMwR.
+install.packages("DMwR_0.4.1.tar.gz", repos=NULL, type="source")
+```
+
+Because the required package `DMwR` might not be available for your version of R, you will need to install the package manually using the file `DMwR_0.4.1.tar.gz` (can be found in this week's lab solution folder) that can be downloaded from the [CRAN](https://cran.r-project.org/web/packages/DMwR/index.html) website. Ensure you save the `DMwR_0.4.1.tar.gz` file in your working directory for the installation to be successful. Use the following command to install: `install.packages("DMwR_0.4.1.tar.gz", repos=NULL, type="source")`.
+
+```{r DMwR, echo=TRUE, message=FALSE, warning=FALSE}
+library(DMwR)
+
+set.seed(108)
+#let's check the two classes in the original (imbalanced) dataset
+nrow(filter(train,default=="Yes") ) # Number of instances in the minority class
+nrow(filter(train,default=="No") )  # Number of instances in the majority class
+
+#By default perc.over = 200, perc.under = 200.
+#The first example:
+train_over <- SMOTE(default ~ ., data = train, perc.over = 200, perc.under = 150,k = 5) 
+nrow(filter(train_over,default=="Yes") ) # Number of instances in the minority class
+nrow(filter(train_over,default=="No") )  # Number of instances in the majority class
+
+#The second example:
+#train_over <- SMOTE(default ~ ., data = train, perc.over = 100, perc.under = 200,k = 5) 
+#nrow(filter(train_over,default=="Yes") ) # Number of instances in the minority class
+#nrow(filter(train_over,default=="No") )  # Number of instances in the majority class
+```
+
+The `perc.over` parameter determines the percentage of over-sampling. For example, setting it to `100` means you will double the number of the minority class, and setting it to `200` means you will triple the number of the minority class. The `perc.under` parameter drives the decision of how many extra cases from the majority classes are selected for each case generated from the minority class (known as under-sampling). Therefore, the under-sampling result is affected by both `perc.under` and `perc.over`. You could play with the above chunk to understand how to control over-sampling and under-sampling.
+
+For each minority class instance, SMOTE generates synthetic instances by interpolating between the instance and its k-nearest neighbors. Specifically, k = 5 was chosen. Next, we can train the random forest model using the SMOTE-augmented training dataset:
+
+```{r rfsmote, echo=TRUE, message=FALSE, warning=FALSE, fig.width=5, fig.height=3, fig.align='center'}
+set.seed(248)
+rf_smote <- train(default ~., data = train_over, method = "rf", metric = "ROC",
+                  trControl = fitcontrol, tuneGrid = expand.grid(mtry = seq(1,15,1)))
+
+print(rf_smote)
+plot(rf_smote)
+```
+
+```{r rfsmotePred, echo=TRUE, message=FALSE, warning=FALSE}
+rf_smote_pred <- predict(rf_smote, newdata = test[,-ncol(credit)], type = "raw")
+rf_smote_conf <- confusionMatrix(rf_smote_pred, test[,ncol(credit)], positive="Yes")
+
+rf_smote_probpred <- predict(rf_smote, newdata = test[,-ncol(credit)], type = "prob")
+rf_smote_auc <- roc.curve(scores.class0 = rf_smote_probpred$Yes, 
+                          weights.class0 = as.numeric(test$default)-1, curve = T)
+rf_smote_auc$auc
+```
+
+```{r table2, echo=FALSE, message=FALSE, warning=FALSE}
+rf_smote_fscore <- (2*rf_smote_conf$byClass["Sensitivity"]*rf_smote_conf$byClass["Pos Pred Value"])/(rf_smote_conf$byClass["Sensitivity"] + rf_smote_conf$byClass["Pos Pred Value"])
+
+model_comparison_smote <- data.frame(
+  Model = c("Tree 1", "Tree 2", "Bagging", "Tuned Bagging","Random Forest","SMOTE Random Forest"),
+  
+  Accuracy = c(tree1_conf$overall['Accuracy'], tree2_conf$overall['Accuracy'], bag_conf$overall['Accuracy'], bag_best_conf$overall['Accuracy'], rf_conf$overall['Accuracy'], rf_smote_conf$overall['Accuracy']),
+  
+  AUC = c(tree1_auc$auc, tree2_auc$auc, bag_auc$auc, bag_best_auc$auc, rf_auc$auc,rf_smote_auc$auc),
+  
+  Sensitivity = c(tree1_conf$byClass['Sensitivity'], tree2_conf$byClass['Sensitivity'], bag_conf$byClass['Sensitivity'], bag_best_conf$byClass['Sensitivity'], rf_conf$byClass['Sensitivity'], rf_smote_conf$byClass['Sensitivity']),
+  
+  Specificity = c(tree1_conf$byClass['Specificity'], tree2_conf$byClass['Specificity'], bag_conf$byClass['Specificity'], bag_best_conf$byClass['Specificity'], rf_conf$byClass['Specificity'], rf_smote_conf$byClass['Specificity']),
+  
+  F_score = c(tree1_fscore, tree2_fscore, bag_fscore, best_bag_fscore, rf_fscore,rf_smote_fscore)
+)
+
+# Print the data frame
+knitr::kable(model_comparison_smote, caption = "Evaluation of different models (including SMOTE Random Forest) using AUC, accuracy, sensitivity, specificity and F-score.")
+```
+
+Remember in week 3, we have built logistic regression models to this credit card default data set. Note we are more interested in how well the models predict the defaulter (class "Yes" not class "No"), who is the minority class. In this case, people usually check Sensitivity, i.e., how many true defaulters are classified to be defaulters. Check the result table above and discuss your findings. If you are interested in SMOTE, try to create different balanced data sets and build models:)
+
+# Conlusion
+
+A model needs to predict defaulters correctly as the misclassification cost of not predicting defaulters is much higher than not predicting non-defaults correctly in the banking industry. The sensitivity is the percentage of defaulters who are correctly identified as non-credible clients while and specificity is the percentage of non-defaulters who are correctly identified as credible clients. The value of sensitivity and specificity can be determined based on the degree of risk that a business is willing to take.
+
+# Reference
