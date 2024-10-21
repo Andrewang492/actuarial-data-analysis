@@ -27,7 +27,7 @@ merged <- merged %>% mutate(breeds_list = strsplit(merged$nb_breed_name_unique_c
 merged <- merged %>% # a variable if a breed has high average claim size. Analysed in data exploration below.
   mutate(severe_breed = ifelse(breed %in% c("american staffordshire terrier", "groodle", "pomeranian", "spoodle"), breed, "not_severe"))
 
-#### data exploration ####
+# data exploration ####
 merged %>% mutate(n_breeds = lapply(breeds_list, length)) %>% filter(n_breeds != nb_number_of_breeds) #!!! One entry to remove. Change to 2 nb_breeds. claim_fcf1e768-655c-48e6-8e68-54ac7092523a
 
 #All breeds in breed set, all good
@@ -55,12 +55,12 @@ merged %>% group_by(breed) %>% summarise(ave_claim = mean(total_claim_amount)) %
 # american staffordshire terrier, groodle, pomeranian, spoodle
 
 
-####Modelling####
+#Modelling####
 set.seed(888)  
 train_indices <- sample(1:nrow(merged), size = 0.7 * nrow(merged)) 
 data_train = merged[train_indices, ]
 data_test = merged[-train_indices, ]
-#conditions modelling ----
+##conditions modelling ----
 selected_conditions <- c(condition_vars[1:4], "condition_Ortho", "condition_Ingestion")
 condition_model <- glm(total_claim_amount ~ ., 
                        data = data_train %>% select(c("total_claim_amount", selected_conditions)),family = Gamma(link = "log"))
@@ -69,7 +69,7 @@ glm_performance(condition_model) #rmse 1057
 condition_model_all <- glm(total_claim_amount ~ ., 
                        data = data_train %>% select(c("total_claim_amount", condition_vars)),family = Gamma(link = "log"))
 glm_performance(condition_model_all) #rmse 1059
-# breeds modelling ----
+##breeds modelling ----
 breed_model <- glm(total_claim_amount ~ ., 
                        data = data_train %>% select(c("total_claim_amount", "breed")),   family = Gamma(link = "log"))
 glm_performance(breed_model) #rmse 1090
@@ -80,12 +80,12 @@ glm_performance(breed_5_model) #rmse 1081
 breed_trait_model <- glm(total_claim_amount ~ ., family = Gamma(link = "log"),
                    data = data_train %>% select(c("total_claim_amount", "nb_breed_trait"))) 
 glm_performance(breed_trait_model) #rmse 1073
-# age modelling ----
+## age modelling ----
 age_model <- glm(total_claim_amount ~ ., 
                                 data = data_train %>% select(c("total_claim_amount", "pet_age_months")),   family = Gamma(link = "log"))
 glm_performance(age_model) #rmse 1067, no significance.
 
-# random combinations
+## random combinations
 gam1 <- glm(total_claim_amount ~ ., 
                                 data = data_train %>% select(c("total_claim_amount", "pet_age_months", selected_conditions, "severe_breed")),   family = Gamma(link = "log"))
 glm_performance(gam1) #rmse 1069
