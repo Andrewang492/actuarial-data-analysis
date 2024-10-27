@@ -65,7 +65,7 @@ merged %>% mutate(wait_after_quote = nb_policy_first_inception_date - quote_date
   select(exposure_id, wait_after_quote, nb_policy_first_inception_date, quote_date) %>% 
   filter((wait_after_quote) < -2880)
 # only one quote that is like super wrong.
-
+# Make a wait_after_quote variable.
 merged <- merged %>% mutate(wait_after_quote = nb_policy_first_inception_date - quote_date) %>% 
   mutate(wait_after_quote = ifelse(wait_after_quote < 0, 0, wait_after_quote))
 
