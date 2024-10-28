@@ -65,6 +65,7 @@ By convention, the set $\{y_j\}$ is empty when $N = 0$.
 
 For modeling the joint outcome $(N, S)$ (or equivalently,$(N, \bar{S})$), it is customary to first condition on the frequency and then modeling the severity. Suppressing the $\{i\}$ subscript, we decompose the distribution (per unit Exposure) of the dependent variables as:
 
+```{=tex}
 \begin{equation} 
 \begin{split}
 f(N,S) &= f(N) \times f(S|N)\\
@@ -72,7 +73,7 @@ f(N,S) &= f(N) \times f(S|N)\\
 \end{split}
 (\#eq:f-q)
 \end{equation}
-
+```
 where $f(N, S)$ denotes the joint distribution of $(N, S)$.
 
 Here is a summary:
@@ -425,6 +426,7 @@ summary(freqPoisson_step)
 
 We performed backward stepwise selection using AIC, which only removed `Density` compared to the full model.
 
+```{=tex}
 \begin{taskbox}
 \textbf{Exercise:}
 
@@ -432,7 +434,7 @@ We performed backward stepwise selection using AIC, which only removed `Density`
 
 2. So far, we've only used backward stepwise selection with AIC. Now, explore other stepwise selection methods (e.g., forward stepwise selection) or use a different criterion (e.g., BIC). Do these approaches result in a different set of predictors being selected?
 \end{taskbox}
-
+```
 ### Regularization Methods (from Week 3)
 
 Alternatively, we can fit Poisson lasso or ridge regression. We leave these methods as an exercise for you to explore further.
@@ -467,12 +469,13 @@ freqPoisson_age2 <- glm(ClaimNb ~ VehPower + VehAge + BonusMalus +
 summary(freqPoisson_age2)
 ```
 
+```{=tex}
 \begin{taskbox}
 \textbf{Exercise:} What are the limitations of these two transformations?
 
 \textit{Hint:} Please refer to Sections 5.4.2 and 5.4.3 of \href{https://www.casact.org/sites/default/files/2021-01/05-Goldburd-Khare-Tevet.pdf}{Generalized Linear Models for Insurance Rating} for further insights on the limitations of polynomial terms and binning continuous predictors.
 \end{taskbox}
-
+```
 ### Poisson GLM with Pre-processed Data Following @wuthrich2023statistical {#sec-prepfreqpoisson}
 
 Lastly, we present an example of a Poisson frequency model following the feature engineering steps in @wuthrich2023statistical, as shown in the code below:
@@ -1008,10 +1011,11 @@ ggplot(decile_summarytest2, aes(x = factor(decile))) +
 
 Both models fit well from the three perspectives we discussed.
 
+```{=tex}
 \begin{taskbox}
 \textbf{Exercise:} In addition to the Gini index introduced above, there are other techniques that can be used to directly compare two candidate models. Please read Section 7 of \href{https://www.casact.org/sites/default/files/2021-01/05-Goldburd-Khare-Tevet.pdf}{Generalized Linear Models for Insurance Rating}, with a particular focus on actual vs. predicted plots \footnote{You can also plot this across all categories of the variable of interest by comparing the average actual values with the model predictions for each category.}, simple quantile plots and double lift charts.
 \end{taskbox}
-
+```
 # Appendix
 
 ## Chi-square goodness of fit test on frequency data

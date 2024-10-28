@@ -147,4 +147,4 @@ cat("MSE:", mse3, "\nRMSE:", rmse3, "\n")
 varImp_rf3 <- varImp(rf_transform, scale = TRUE)
 print(varImp_rf3)
 plot(varImp_rf3)
-# wait after quote is top. pet age months folowed by squared, owner age years.
+# wait after quote is top. pet age months followed by squared, owner age years.
