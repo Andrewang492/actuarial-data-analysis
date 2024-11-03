@@ -30,7 +30,7 @@ merged <- read_csv("Data/merged.csv")
 # turn into factors
 merged <- merged %>%mutate(across(
   c(pet_gender, pet_de_sexed_age, nb_address_type_adj, nb_suburb, nb_postcode,
-    nb_state, pet_age_years, nb_breed_type, nb_breed_trait),
+    nb_state, nb_breed_type, nb_breed_trait),
   as.factor
 ))
 
@@ -52,7 +52,7 @@ merged <- merged %>% filter(average_claim_size > 0) %>%
   group_by(nb_breed_trait) %>%
   filter(n() > 5) %>%
   ungroup()
-set.seed(888)  
+set.seed(843)  
 
 train_indices <- sample(1:nrow(merged), size = 0.7 * nrow(merged)) 
 data_train = merged[train_indices, ]
@@ -79,7 +79,7 @@ m3 <- glm(average_claim_size ~ pet_de_sexed_age + pet_age_years + nb_breed_trait
                       weights = claimNb, 
                       data = data_train)
 glm_performance(m3) # 30300 2567 5022
-m4 <- glm(average_claim_size ~ pet_de_sexed_age + pet_age_years + nb_breed_trait + log(pet_age_months), 
+m4 <- glm(average_claim_size ~ pet_de_sexed_age + nb_breed_trait + log(pet_age_months), 
                       family = Gamma(link = "log"), 
                       weights = claimNb, 
                       data = data_train)
@@ -90,6 +90,14 @@ m5 <- glm(average_claim_size ~ pet_de_sexed_age + pet_age_years + nb_breed_trait
                       data = data_train)
 glm_performance(m5) # 30304 2566 4993
 m6 <- glm(average_claim_size ~ pet_de_sexed_age + pet_age_years + nb_breed_trait + pet_age_months + quote_time_group, 
+                      family = Gamma(link = "log"), 
+                      weights = claimNb, 
+                      data = data_train)
+m6 <- glm(average_claim_size ~ pet_de_sexed_age + I(pet_age_years^2) + nb_breed_trait + pet_age_months + quote_time_group, 
+                      family = Gamma(link = "log"), 
+                      weights = claimNb, 
+                      data = data_train)
+m6 <- glm(average_claim_size ~ pet_de_sexed_age + I(log(pet_age_years)) + nb_breed_trait + pet_age_months + quote_time_group, 
                       family = Gamma(link = "log"), 
                       weights = claimNb, 
                       data = data_train)
@@ -105,3 +113,5 @@ c1 <- glm(average_claim_size ~ I(pet_age_months^2) +
     weights = claimNb, 
     data = data_train)
 glm_performance(c1) # 30265 2519 5708
+
+# log pet age months is ok Square pet age years is ok.

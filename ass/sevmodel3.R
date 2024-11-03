@@ -10,7 +10,7 @@ glm_performance <- function(model, test_data= data_test) {
   predictions <- predict.glm(model, newdata = test_data, type="response")
   print(anova(model))
   print(paste("RMSE: ", RMSE(predictions, test_data$total_claim_amount)))
-  print(paste("RMSE: ", AIC(predictions, test_data$total_claim_amount)))
+  #print(paste("RMSE: ", AIC(predictions, test_data$total_claim_amount)))
   print(AIC(model))
   ggplot() +
     geom_density(data = data.frame(predictions = predictions),
@@ -20,7 +20,7 @@ glm_performance <- function(model, test_data= data_test) {
     xlim(0,7500) # Note that we cut observations.
 }
 # Data manipulation ####
-merged <- read_csv("Data/merged.csv")
+merged <- read_csv("Data/mergedclaims.csv")
 merged$pet_de_sexed_age <- as.factor(merged$pet_de_sexed_age)
 condition_vars <- grep("^condition", names(sev_data_train), value = TRUE)
 merged <- merged %>% mutate(breeds_list = strsplit(merged$nb_breed_name_unique_concat, ","))
@@ -42,8 +42,8 @@ anova(model) # Also ingestion.
 
 #breeds
 # Create density plot with overlapping lines for each ____
-ggplot(merged, aes(x = total_claim_amount, color = nb_breed_type)) +
-  geom_density(linewidth = 2) +  # Size adjusts the thickness of the lines
+ggplot(merged, aes(x = log(total_claim_amount), color = nb_breed_type)) +
+  geom_density(linewidth = 1) +  # Size adjusts the thickness of the lines
   labs(title = "Distribution of Claim Amounts by Breed",
        x = "Claim Amount",
        y = "Density")

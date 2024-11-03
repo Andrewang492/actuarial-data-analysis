@@ -39,7 +39,7 @@ dwellingstock <- dwellingstock %>% filter(Year == 2022) %>%
   mutate(state = ifelse(Label == "Australian Capital Territory", "ACT", state)) %>%
   mutate(state = ifelse(Label == "Queensland", "QLD", state)) %>%
   filter(state != "Australia" & state != "Other Territories") %>%
-  select(-Code, -Label, -Year)
+  dplyr::select(-Code, -Label, -Year)
 
 merged <- merge(merged, dwellingstock,  by.x = "nb_state", by.y = "state")
 dwellingvars <- colnames(dwellingstock)[4:length(colnames(dwellingstock))-1] #not label, year, state, code.
@@ -51,6 +51,7 @@ data_train = merged[train_indices, ]
 data_test = merged[-train_indices, ]
 
 dwellingmodel <- glm(total_claim_amount ~ ., 
-                       data = data_train %>% select(c("total_claim_amount", dwellingvars)),family = Gamma(link = "log"))
+                       data = data_train %>% dplyr::select(c("total_claim_amount", dwellingvars)),family = Gamma(link = "log"))
 glm_performance(dwellingmodel)
 predictions <- predict.glm(dwellingmodel, newdata = data_test, type="response")
+

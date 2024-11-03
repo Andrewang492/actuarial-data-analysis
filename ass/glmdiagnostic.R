@@ -54,6 +54,8 @@ ggplot(data = merged, mapping = aes(y = average_claim_size, x = pet_age_months))
   geom_smooth() +
   geom_point() +
   ylim(c(0, 2000))
+ggplot(data = merged, mapping = aes(y = average_claim_size, x = owner_age_years)) +
+  geom_smooth()
 
 
 #Modelling ####
@@ -97,6 +99,7 @@ plot(fitted_values, residuals^2,
      ylim = c(-100, 1000000 ))
 abline(lm(residuals^2 ~ fitted_values), col = "red")  # Add trend line
 
+plot(residuals(m7, type="deviance"))
 
 ## lognormal ####
 m1 <- glm(log(average_claim_size) ~ pet_de_sexed_age + pet_age_years + nb_breed_trait + quote_time_group, 

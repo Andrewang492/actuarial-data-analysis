@@ -2,19 +2,41 @@ library(randomForest)
 library(caret) 
 library(tidyverse)
 
-
-
 # merged data manip ####
 merged <- read_csv("Data/merged.csv")
+# Make a wait_after_quote variable.
+merged <- merged %>% mutate(wait_after_quote = nb_policy_first_inception_date - quote_date) 
 # turn into factors
 merged <- merged %>%mutate(across(
   c(pet_gender, pet_de_sexed_age, nb_address_type_adj, nb_suburb, nb_postcode,
-    nb_state, pet_age_years, nb_breed_type, nb_breed_trait),
+    nb_state, pet_age_years, nb_breed_type, nb_breed_trait, pet_is_switcher),
   as.factor
 ))
+merged <- merged %>%mutate(
+  across(c(pet_gender, pet_de_sexed, pet_de_sexed_age, pet_is_switcher, 
+           nb_address_type_adj, nb_suburb, nb_postcode,
+           nb_state, nb_breed_type,
+           nb_breed_trait, is_multi_pet_plan, nb_breed_name_unique,
+           nb_breed_name_unique_concat, quote_time_group, breed, breed_group), 
+         as.factor)
+)
+
+# NOTE change dates to numerics here.
+merged <- merged %>%mutate(
+  across(c(nb_policy_first_inception_date, person_dob, quote_date, UW_Date, wait_after_quote), 
+         as.numeric)
+)
+
 # Make a wait_after_quote variable.
-merged <- merged %>% mutate(wait_after_quote = nb_policy_first_inception_date - quote_date) 
-#  mutate(wait_after_quote = ifelse(wait_after_quote < 0, 0, wait_after_quote))
+merged <- merged %>% mutate(wait_after_quote = as.numeric(nb_policy_first_inception_date - quote_date))
+
+#Modelling ####
+set.seed(88)  
+
+predictors <- colnames(merged)
+excluded <- c("total_claim_amount", "claim_paid", "claimNb", "person_dob", "exposure_id", "average_claim_size", "nb_policy_first_inception_date", "nb_postcode", "nb_suburb", "nb_breed_type", "nb_breed_name_unique",  "nb_breed_name_unique_concat", "max_tenure", "UW_Date", "breed", "nb_breed_trait", "pet_age_years",
+              "pet_de_sexed", "breed_group", "total_earned_units", "quote_date")
+predictors <- predictors[!(predictors %in% excluded) & !grepl("^condition", predictors)]
 
 #### Doing training ####
 set.seed(888)  
@@ -78,6 +100,19 @@ predictions <- predict(rf_model, newdata = data_test)
 mse <- mean((predictions - data_test$average_claim_size)^2)
 rmse <- sqrt(mse)
 cat("MSE:", mse, "\nRMSE:", rmse, "\n")
+
+# compare to a glm:
+m4 <- glm(average_claim_size ~ pet_gender + pet_de_sexed + pet_de_sexed_age  +  
+  pet_is_switcher + pet_age_months + nb_contribution + nb_excess +
+  nb_address_type_adj + nb_contribution_excess + owner_age_years + 
+  nb_number_of_breeds + nb_average_breed_size + is_multi_pet_plan + 
+  breed_group,
+          family = Gamma(link = "log"), 
+          weights = claimNb, 
+          data = data_train %>% filter(average_claim_size > 0))
+glmpredictions <- predict.glm(m4, newdata = data_test)
+cat("RMSE:", sqrt(mean((glmpredictions-data_test$average_claim_size)^2)))
+
 # Feature importance
 varImp_rf <- varImp(rf_model, scale = TRUE)
 print(varImp_rf)

@@ -1,0 +1,147 @@
+---
+title: "Severity Modelling"
+author: "Jayden Ly"
+date: "2024-10-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(dplyr)
+```
+
+```{r}
+
+sample_output <- read_csv("Data/Sample_price_output_file.csv")
+colnames(sample_output)
+
+merged <- read_csv("Data/merged.csv")
+merged <- merged %>% mutate(across(
+    c(pet_gender, pet_de_sexed_age, nb_address_type_adj, nb_suburb, nb_postcode,
+      nb_state, pet_age_years, nb_breed_type, nb_breed_name_unique, nb_breed_trait, pet_is_switcher, breed, breed_group),
+    as.factor)
+  )
+correct_order <- c("0-6 months", "7-12 months", "1 years", "2 years", "3 years", 
+                   "4 years", "5 years", "6 years", "7 years", "8 years", "9 years")
+merged$pet_age_years <- factor(merged$pet_age_years, levels = correct_order, ordered = TRUE)
+
+```
+
+# Lasso
+
+```{r}
+library(glmnet)
+
+y <- merged$average_claim_size
+predictors <- colnames(merged)
+excluded <- c("total_claim_amount", "claim_paid", "claimNb", "person_dob", "exposure_id", "average_claim_size", "pet_de_sexed", "nb_policy_first_inception_date", "nb_postcode", "nb_suburb", "nb_breed_type", "nb_breed_name_unique",  "nb_breed_name_unique_concat", "lead_date_day", "quote_date", "quote_time_group", "max_tenure", "UW_Date", "breed", "nb_breed_trait")
+predictors <- predictors[!(predictors %in% excluded) & !grepl("^condition", predictors)]
+
+X <- model.matrix(~., data=merged[,predictors])
+lassoCV <- cv.glmnet(X, y, alpha = 1)
+plot(lassoCV)
+best_lambda <- lassoCV$lambda.min
+lasso_final <- glmnet(X, y, alpha = 1, lambda = best_lambda)
+
+coef(lasso_final)
+# Print the coefficients of the final model
+coefficients <- coef(lasso_final)
+coefficients_df <- as.data.frame(as.matrix(coefficients))
+non_zero_coefficients <- coefficients_df[coefficients_df$s0 != 0, , drop = FALSE]
+non_zero_coefficients
+
+lassoSelectedFeatures <- c("condition_Other", "condition_AllergiesAndskin", "condition_EyesAndears", "condition_Ingestion", "condition_Dental", "condition_BehavioralIssues", "pet_de_sexed", "nb_excess", "claimNb", "nb_breed_trait")
+
+```
+
+```{r}
+ridgeCV <- cv.glmnet(X, y, alpha = 0)
+plot(ridgeCV)
+best_lambda <- ridgeCV$lambda.min
+
+ridgeCV <- glmnet(X, y, alpha = 0.5, lambda = best_lambda)
+coefficients <- coef(ridgeCV)
+coefficients_df <- as.data.frame(as.matrix(coefficients))
+non_zero_coefficients <- coefficients_df[coefficients_df$s0 != 0, , drop = FALSE]
+non_zero_coefficients
+```
+
+```{r}
+elasticNetCV <- cv.glmnet(X, y, alpha = 0.5)
+plot(elasticNetCV)
+best_lambda <- elasticNetCV$lambda.min
+
+elasticNetCV <- glmnet(X, y, alpha = 0.5, lambda = best_lambda)
+coefficients <- coef(elasticNetCV)
+coefficients_df <- as.data.frame(as.matrix(coefficients))
+non_zero_coefficients <- coefficients_df[coefficients_df$s0 != 0, , drop = FALSE]
+non_zero_coefficients
+
+```
+
+# Gamma Model
+
+```{r}
+library(Metrics)
+
+predictors <- colnames(merged)
+excluded <- c("total_claim_amount", "claim_paid", "claimNb", "person_dob", "exposure_id", "average_claim_size", "nb_policy_first_inception_date", "nb_postcode", "nb_suburb", "nb_breed_type", "nb_breed_name_unique",  "nb_breed_name_unique_concat", "lead_date_day", "quote_date", "quote_time_group", "max_tenure", "UW_Date", "breed", "nb_breed_trait", "pet_age_years", "nb_state")
+predictors <- predictors[!(predictors %in% excluded) & !grepl("^condition", predictors)]
+
+#owner_age_years <- merged$owner_age_years
+merged <- merged[, c(predictors, "average_claim_size", "claimNb")]
+merged <- merged %>% filter(average_claim_size > 0)
+# merged <- merged %>% mutate(pet_age_months = as.factor(as.character(pet_age_months)))
+train_indices <- sample(1:nrow(merged), size = 0.7 * nrow(merged))
+divide_into_bins <- function(x, n) {
+  breaks <- quantile(x, probs=seq(0, 1, length.out=n))
+  breaks[1] <- breaks[1] - 1
+  breaks[length(breaks)] <- breaks[length(breaks)] + 1
+  cut(x, breaks=breaks)
+}
+
+#merged <- merged %>% mutate(owner_age_years = divide_into_bins(owner_age_years, 3))
+
+train_data <- merged[train_indices, ]
+test_data <- merged[-train_indices, ]
+
+
+sevGamma_full  <- glm(average_claim_size ~ .-claimNb,
+                       data = train_data,
+                       family = Gamma(link = "log"),
+                       weights=claimNb)
+
+test_data$pred_average_claim_size <- predict(sevGamma_full, newdata = test_data, type = "response")
+
+rmse(test_data$pred_average_claim_size, test_data$average_claim_size)
+
+anova(sevGamma_full, test="Chisq")
+```
+
+# Random Forest
+
+```{r}
+# packages for random forest
+library(randomForest)
+library(varImp)
+library(forcats)
+
+
+predictors <- colnames(merged)
+excluded <- c("total_claim_amount", "claim_paid", "claimNb", "person_dob", "exposure_id", "average_claim_size", "pet_de_sexed", "nb_policy_first_inception_date", "nb_postcode", "nb_suburb", "nb_breed_type", "nb_breed_name_unique",  "nb_breed_name_unique_concat", "lead_date_day", "quote_date", "quote_time_group", "max_tenure", "UW_Date", "breed", "nb_breed_trait", "total_earned_units")
+predictors <- predictors[!(predictors %in% excluded) & !grepl("^condition", predictors)]
+
+sev_model_data <- merged[,c(predictors, "average_claim_size", "claimNb")] %>%   filter(average_claim_size > 0)
+
+rf_model <- randomForest(average_claim_size ~ . -claimNb, data=sev_model_data, importance=TRUE)
+rf_model$importance
+
+vImp <- rf_model$importance[,2]
+x <- names(vImp)
+y <- as.vector(vImp)
+y <- y / max(y) * 100
+
+ggplot() +
+  geom_col(aes(x=y, y=fct_rev(fct_reorder(x, y))))
+```

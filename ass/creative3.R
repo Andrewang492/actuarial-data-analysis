@@ -9,6 +9,7 @@ glm_performance <- function(model, test_data= data_test) {
   expected <- test_data$average_claim_size
   print(anova(model))
   print(summary(model))
+  
   print(paste("RMSE: ", RMSE(predictions, test_data$average_claim_size)))
   print(paste("AIC: ", AIC(model)))
   print(paste("Model deviance: ", deviance(model)))
@@ -162,3 +163,5 @@ m7 <- glm(average_claim_size ~ pet_de_sexed_age + pet_age_years + nb_breed_trait
           data = data_train)
 glm_performance(m7) # 4984
 summary(m7)
+
+residuals(m7, type = "deviance")

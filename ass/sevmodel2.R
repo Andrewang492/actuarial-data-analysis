@@ -1,9 +1,10 @@
-library(tidyverse)
 library(ggplot2)
 library(lubridate)
 library(MASS) #stepAIC and glm.nb()
 library(ggcorrplot)
-merged <- read_csv("Data/merged.csv")
+library(tidyverse)
+
+merged <- read_csv("Data/mergedclaims.csv")
 
 merged <- merged %>% mutate(across(
   c(pet_gender, pet_de_sexed_age, nb_address_type_adj, nb_suburb, nb_postcode,
@@ -106,9 +107,13 @@ cor(t$total_claim_amount, as.numeric(t$pet_de_sexed_age)) #only -0.01867
 ggplot(data=data) +
   geom_density(mapping = aes(x = total_claim_amount, color=is_multi_pet_plan, linewidth = 2))
 # densities for the claim amounts for 3 excess hodlers.
-ggplot(data=data %>% mutate(nb_excess = as.factor(nb_excess)) %>% filter(total_claim_amount > 1000)) +
+ggplot(data=data %>% mutate(nb_excess = as.factor(nb_excess)) %>% filter(total_claim_amount > 0)) +
+  geom_density(mapping = aes(x = log(total_claim_amount), color=nb_excess)) +
+  labs(title = "Proportional of claims for different Excesses", xlab = "log(total_claim_amount)")
+
+ggplot(data=data %>% mutate(nb_excess = as.factor(nb_excess)) %>% filter(total_claim_amount < 5000)) +
   geom_density(mapping = aes(x = total_claim_amount, color=nb_excess)) +
-  labs(title = "Proportional of claims that are large, for different Excesses")
+  labs(title = "Proportional of claims for different Excesses")
 # boxplots on breeds
 ggplot(data=data %>% filter(total_claim_amount > 1000)) +
   geom_boxplot(mapping = aes(y = total_claim_amount)) +

@@ -2,8 +2,11 @@ library(tidyverse)
 library(ggplot2)
 library(lubridate)
 library(MASS) #stepAIC and glm.nb()
+
+claims_data %>% group_by(claim_id, exposure_id) %>% summarise(claim_paid = sum(claim_paid), total_claim_amount = sum(total_claim_amount)) %>% group_by(exposure_id)  %>% summarise(claim_paid = mean(claim_paid), total_claim_amount = sum(total_claim_amount))  %>% filter(total_claim_amount > 0 & claim_paid > 0)
+
 #### Data setup ####
-claims_data <- read_csv("UNSW_claims_data.csv")
+claims_data <- read_csv("Data/UNSW_claims_data.csv")
 
 #Skipping first column which is just numbers
 earned_data <- read_csv("UNSW_earned_data_adjusted_Sep27.csv")[, -1]
