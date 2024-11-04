@@ -52,14 +52,29 @@ merged <- merged %>%
   mutate(nb_breed_trait = ifelse(n() < 5, "unknown", nb_breed_trait)) %>% 
   ungroup() %>% # get rid of 3
   mutate(nb_breed_trait = as.factor(nb_breed_trait))
-  
 
+merged <- merged %>% select (-c(5:15)) # get rid of conditions values.
+
+# put some income data in
+incomepostcode4 <- read_csv("Data/External/income_by_postcode_sa4.csv")
+incomepostcode4$POSTCODE <- as.factor(incomepostcode4$POSTCODE)
+merged <- merged %>% left_join( y = incomepostcode4, by = join_by(nb_postcode == POSTCODE))
+merged <- merged %>%
+  mutate(across(38:43, ~ ifelse(is.na(.), mean(., na.rm = TRUE), .))) # change 11 unmatched postcodes to be average.
+
+# put some land data in
+landpostcode4 <- read_csv("Data/External/land_by_postcode_sa4.csv")
+landpostcode4$POSTCODE <- as.factor(landpostcode4$POSTCODE)
+merged <- merged %>% left_join( y = landpostcode4, by = join_by(nb_postcode == POSTCODE))
+merged <- merged %>%
+  mutate(across(44:63, ~ ifelse(is.na(.), mean(., na.rm = TRUE), .))) # change 11 unmatched postcodes to be average.
+#merged %>% filter(nb_postcode == 3336) %>% select(c(38:43), exposure_id)
+merged %>% filter(nb_postcode == 3336) %>% select(c(44:54), exposure_id)
 #Data split ####
 set.seed(43)  
 train_indices <- sample(1:nrow(merged), size = 0.7 * nrow(merged)) 
 data_train = merged[train_indices, ]
 data_test = merged[-train_indices, ]
-
 
 # Test functions ####
 
@@ -77,8 +92,6 @@ spearmancor <- function(model, testdata) {
   cor <- cor(predicted_values, observed_values, method = "spearman")
   return(cor)
 }
-
-## CV ####
 # Set up cross-validation folds
 folds = 5
 set.seed(123)  # for reproducibility
@@ -105,7 +118,7 @@ cross_validate_glm <- function(data, formula, family, folds = 5) {
     
     # Calculate mean squared error on the test set
     observed_values = test_data$average_claim_size
-    rmse_values[i] <- sqrt(mean((observed_values - predictions)^2))
+    rmse_values[i] <- RMSE(predictions, test_data$average_claim_size, na.rm = TRUE)
     dev_values[i] <- 2 * sum(-log(observed_values / predictions) + 
                          (observed_values - predictions)/predictions)
   }
@@ -163,19 +176,21 @@ glmdiagnosis <- function(m, test_data = data_test) {
   expected <- test_data$average_claim_size
   print(anova(m))
   print(summary(m))
-  print(data.frame(row.names = c("RMSE", "AIC", "BIC", "Model Dev", "Spearman Cor"), result = c(
-    RMSE(predictions, test_data$average_claim_size),
+  results <- data.frame(row.names = c("RMSE", "AIC", "BIC", "Model Dev", "Spearman Cor"), result = c(
+    RMSE(predictions, test_data$average_claim_size, na.rm = TRUE),
     AIC(m),
     BIC(m),
     deviance(m),
     spearmancor(m, test_data)
-  )))
+  ))
+  print(results)
   
   ggplot() +
     geom_density(data = data.frame(predictions = predictions),
                  mapping = aes(x=predictions)) +
     labs(title = "x") +
     geom_density(data = test_data, mapping = aes(x=average_claim_size), col = 'red')
+  return(results)
 }
 
 
@@ -276,7 +291,7 @@ summary(m9)
 glmdiagnosis(m9, data_test)
 deciletest(m9, data_test)
 gammadeviance(m9, data_test)
-cross_validate_glm(merged, f9, Gamma(link="log"))
+#cross_validate_glm(merged, f9, Gamma(link="log"))
 
 ## breed group fav instead of breed trait ####
 f8 <- formula(average_claim_size ~ pet_de_sexed_age  + nb_average_breed_size +
@@ -291,12 +306,57 @@ deciletest(m8, data_test)
 gammadeviance(m8, data_test)
 cross_validate_glm(merged, f8, Gamma(link="log"))
 
+
+## with external income Fav ####
+f10 <- formula(average_claim_size ~ pet_de_sexed_age +
+                nb_contribution + nb_excess + wait_after_quote + pet_age_months +
+                Employee_earners + Employee_median_age + Total_income_m + 
+                Mean_income + Median_income + Main_income_pct)
+f10 <- formula(average_claim_size ~ pet_de_sexed_age +
+                nb_contribution + nb_excess + quote_time_group + pet_age_months +
+                Total_income_m)
+f10 <- formula(average_claim_size ~ pet_de_sexed_age +
+                nb_contribution + nb_excess + wait_after_quote + pet_age_months +
+                Employee_earners)
+m10 <- glm(f10,
+          family = Gamma(link = "log"), 
+          weights = claimNb, 
+          data = data_train)
+glmdiagnosis(m10, data_test)
+deciletest(m10, data_test)
+gammadeviance(m10, data_test)
+cross_validate_glm(merged, f10, Gamma(link="log"))
+## with external land ####
+# Fail with most.
+f12 <- formula(average_claim_size ~ pet_de_sexed_age +
+                 nb_contribution + nb_excess + log(pet_age_months) +
+                 Mean_income + I((irrigated_agricultural_land_area_ha)))
+m12 <- glm(f12,
+           family = Gamma(link = "log"), 
+           weights = claimNb, 
+           data = merged)
+glmdiagnosis(m12, data_test)
+deciletest(m10, data_test)
+gammadeviance(m10, data_test)
+cross_validate_glm(merged, f10, Gamma(link="log"))
 # Main ####
 
 glmdiagnosis(nullmodel, data_test)
 deciletest(nullmodel, data_test)
 cross_validate_glm(merged, formula(average_claim_size ~ 1), Gamma(link="log"))
 gammadeviance(nullmodel, data_test)
+
+f10 <- formula(average_claim_size ~ pet_de_sexed_age +
+                 nb_contribution + nb_excess + log(pet_age_months) +
+                 Mean_income + nb_breed_trait)
+m10 <- glm(f10,
+           family = Gamma(link = "log"), 
+           weights = claimNb, 
+           data = data_train)
+m10r <- glmdiagnosis(m10, data_test)
+deciletest(m10, data_test)
+gammadeviance(m10, data_test)
+cross_validate_glm(merged, f10, Gamma(link="log"))
 
 glmdiagnosis(m1, data_test)
 deciletest(m1, data_test)
@@ -315,3 +375,71 @@ cross_validate_glm(merged, f7, Gamma(link="log"))
 gammadeviance(m7, data_test)
 
 
+# Final !?####
+
+f10 <- formula(average_claim_size ~ pet_de_sexed_age +
+                 nb_contribution + nb_excess + log(pet_age_months) +
+                 Mean_income + nb_breed_trait)
+m10 <- glm(f10,
+           family = Gamma(link = "log"), 
+           weights = claimNb, 
+           data = merged)
+m10r <- glmdiagnosis(m10, data_test)
+m10r
+deciletest(m10, data_test)
+gammadeviance(m10, data_test)
+cross_validate_glm(merged, f10, Gamma(link="log"))
+
+
+# compare with subset. It's better but i don't want to change.
+f10subset <- formula(average_claim_size ~ pet_de_sexed_age +
+                 nb_contribution + nb_excess + log(pet_age_months)) # without mean income
+m10subset <- glm(f10subset,
+           family = Gamma(link = "log"), 
+           weights = claimNb, 
+           data = merged)
+anova(m10subset, m10, test = "LRT")
+
+# Electing to include mean income just because.
+# Considering wait_after_quote because gbm output.
+
+# Gathering results to present ####
+m0r <- glmdiagnosis(nullmodel, data_test)
+deciletest(nullmodel, data_test)
+m0cv <- cross_validate_glm(merged, formula(average_claim_size ~ 1), Gamma(link="log"))
+gammadeviance(nullmodel, data_test)
+
+m1r <- glmdiagnosis(m1, data_test)
+deciletest(m1, data_test)
+m1cv <- cross_validate_glm(merged, f1, Gamma(link="log"))
+gammadeviance(m1, data_test)
+
+m4r <- glmdiagnosis(m4, data_test)
+deciletest(m4, data_test)
+m4cv <- cross_validate_glm(merged, f4, Gamma(link="log"))
+gammadeviance(m4, data_test)
+
+m10r <- glmdiagnosis(m10, data_test)
+deciletest(m10, data_test)
+m10cv <- cross_validate_glm(merged, f10, Gamma(link="log"))
+gammadeviance(m10, data_test)
+
+m12r <- glmdiagnosis(m12, data_test)
+deciletest(m12, data_test)
+m12cv <- cross_validate_glm(merged, f12, Gamma(link="log"))
+gammadeviance(m12, data_test)
+
+ress <- data.frame(m0r, m1r, m4r, m10r, m12r)
+names(ress) <- c("m0", "m1", "m4", "m10", "m12")
+
+m12cv[c('average_rmse', 'average_dev')]
+cvs <- data.frame(rownames = c("CV RMSE", "CV Gamma Deviance"),
+                  c(m0cv$average_rmse, m0cv$average_dev), 
+                  c(m1cv$average_rmse, m1cv$average_dev),
+                  c(m4cv$average_rmse, m4cv$average_dev),
+                  c(m10cv$average_rmse, m10cv$average_dev),
+                  c(m12cv$average_rmse, m12cv$average_dev))
+names(cvs) <- c(" ", "m0", "m1", "m4", "m10", "m12")
+
+ress
+cvs

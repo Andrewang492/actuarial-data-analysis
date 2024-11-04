@@ -212,3 +212,15 @@ summary(m4l)
 cross_validate_glm_l(merged, f4l, "gaussian")
 deciletest_L(m4l, data_test)
 glmdiagnosis_L(m4l)
+
+f10l <- formula(log(average_claim_size+1) ~ pet_de_sexed_age +
+                 nb_contribution + nb_excess + log(pet_age_months) +
+                 Mean_income)
+m10l <- glm(f10l,
+           family = Gamma(link="log"), 
+           weights = claimNb, 
+           data = merged)
+glmdiagnosis_L(m10l)
+summary(m10l)
+cross_validate_glm_l(merged, f10l, "gaussian")
+deciletest_L(m10l, data_test)

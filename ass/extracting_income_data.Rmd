@@ -1,0 +1,98 @@
+---
+title: "income_data"
+author: "Jayden Ly"
+date: "2024-11-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readxl)
+
+income_data <- read_excel("data/income_data.xlsx", range = "A7:I23279", sheet="Table 1")
+
+colnames(income_data) <- c(
+  "Code", "Label", "Year", "Employee_earners",
+  "Employee_median_age", "Total_income_m",
+  "Median_income", "Mean_income", "Main_income_pct"
+)
+
+income_data <- income_data %>%
+  mutate(across(4:ncol(income_data), as.numeric),
+         Code = as.numeric(Code)) %>%
+  group_by(Code, Label) %>%
+  dplyr::select(-c(Year)) %>%
+  summarise(across(everything(), ~ mean(.x, na.rm=TRUE)), .groups = 'drop' )
+
+View(income_data %>% filter(nchar(Code) == 5))
+```
+
+```{r}
+income_data_sa4 <- income_data %>% filter(nchar(Code) == 3)
+
+postcode_mappings <- na.omit(read_excel("data/POSTCODE_SA4_MAPPING.xls", range = "B6:F5995", sheet="Table 3"))
+
+tmp <- postcode_mappings %>% 
+  mutate(across(-SA4_NAME_2011, as.numeric)) %>%
+  left_join(income_data_sa4, by=c("SA4_CODE_2011" = "Code")) %>%
+  mutate(across(Employee_earners:Main_income_pct, ~ . * RATIO)) %>% 
+  group_by(POSTCODE) %>%
+  summarise(across(Employee_earners:Main_income_pct, ~ mean(., na.rm=TRUE)))
+
+tmp <- na.omit(tmp)
+
+missing <- setdiff(unique(as.numeric(postcode_mappings$POSTCODE)), as.numeric(tmp$POSTCODE))
+length(missing)
+
+write.csv(tmp, "income_by_postcode_sa4.csv", row.names = FALSE)
+```
+
+```{r}
+income_data_sa3 <- income_data %>% filter(nchar(Code) == 5)
+
+postcode_mappings <- na.omit(read_excel("data/POSTCODE_SA3_MAPPING.xls", range = "B6:F5995", sheet="Table 3"))
+
+tmp <- postcode_mappings %>% 
+  mutate(across(-SA3_NAME_2011, as.numeric)) %>%
+  left_join(income_data_sa3, by=c("SA3_CODE_2011" = "Code")) %>%
+  mutate(across(Employee_earners:Main_income_pct, ~ . * RATIO)) %>% 
+  group_by(POSTCODE) %>%
+  summarise(across(Employee_earners:Main_income_pct, ~ mean(., na.rm=TRUE)))
+
+tmp <- na.omit(tmp)
+
+missing <- setdiff(unique(as.numeric(postcode_mappings$POSTCODE)), as.numeric(tmp$POSTCODE))
+length(missing)
+
+write.csv(tmp, "income_by_postcode_sa3.csv", row.names = FALSE)
+```
+
+```{r}
+income_data_sa2 <- income_data %>% filter(nchar(Code) == 9)
+
+postcode_mappings <- na.omit(read_excel("data/POSTCODE_SA2_MAPPING.xls", range = "B6:F5995", sheet="Table 3"))
+
+View(postcode_mappings)
+View(income_data_sa2)
+
+tmp <- postcode_mappings %>% 
+  mutate(across(-SA2_NAME_2011, as.numeric)) %>%
+  left_join(income_data_sa2, by=c("SA2_MAINCODE_2011" = "Code")) %>%
+  mutate(across(Employee_earners:Main_income_pct, ~ . * RATIO)) %>% 
+  group_by(POSTCODE) %>%
+  summarise(across(Employee_earners:Main_income_pct, ~ mean(., na.rm=TRUE)))
+
+tmp <- na.omit(tmp)
+
+missing <- setdiff(unique(as.numeric(postcode_mappings$POSTCODE)), as.numeric(tmp$POSTCODE))
+length(missing)
+missing
+income_data_sa2 %>% filter(Code == 7262)
+
+View(postcode_mappings)
+View(income_data_sa2)
+write.csv(tmp, "income_by_postcode_sa2.csv", row.names = FALSE)
+```
