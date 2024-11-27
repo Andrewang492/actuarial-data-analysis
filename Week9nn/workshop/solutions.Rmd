@@ -1,0 +1,716 @@
+---
+title: "ACTL4305/5305 Actuarial Data Science Applications"
+subtitle: "Week 9 Workshop"
+author: ""
+date: ""
+output: 
+ bookdown::pdf_document2:
+    toc: no
+    toc_depth: '3'
+    number_sections: yes
+    fig_caption: yes
+    code_folding: hide
+urlcolor: blue
+header-includes: |    
+ \usepackage{xcolor}
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning=FALSE, message=FALSE,fig.width=5, fig.height=4, fig.align =  'center')
+```
+
+# Week 8 StoryWall Feedback and Additional Questions
+
+Your actuarial consulting firm has been hired by a large hospital ABC to
+help the hospital executives gain a better understanding of the factors
+that drive inpatient length of stay. This insight will allow the
+administrators to better understand and manage patient needs.
+
+ABC has provided data on historical inpatient encounters for patients
+with diabetes. Each encounter includes the length of stay in hospital,
+measured in days. Your task is to use the available data to identify and
+interpret the factors that relate to inpatient stay duration.
+
+## Data Import and Exploration
+
+I begin by loading the libraries, data, and summarizing the data and
+structure to see the missing values.
+
+```{r}
+# RNGkind(sample.kind = "Rounding") # Uncomment if running R 3.6.x or later
+
+# Load packages and data
+
+# Load packages
+library(plyr)
+library(dplyr)
+
+# Load data
+data.all <- read.csv(file = "W9-workshop-Data.csv")
+as_tibble(data.all)
+summary(data.all)
+```
+
+**Question** Identify a variable that may have potential ethical
+concerns. Discuss the considerations related to using this variable in a
+model for this business problem. (Note: ethical considerations will be
+formally discussed in week 10, but it would be good to have some initial
+thoughts on this issue.)
+
+Including the race variable in the model could lead to discriminatory
+model applications, so we should consider whether to remove the variable
+from the final model. Before making decisions based on the final model
+application, we could use the race data to understand whether or not
+there are any unfair impacts created. We may also want to discuss the
+issue with legal experts.
+
+Below, I examine the relationship of missing values for the race and
+admit_type_id variables vs the target variable.
+
+```{r}
+
+# race
+data.all %>%
+    group_by(race) %>%
+    summarise(
+      mean = mean(days),
+      median = median(days),
+      n = n()
+    )
+
+
+# admit_type_id
+data.all %>%
+    group_by(admit_type_id) %>%
+    summarise(
+      mean = mean(days),
+      median = median(days),
+      n = n()
+    )
+
+
+```
+
+**Question**: We do not know if the missing values of "race" variables
+are at random or not. what do you think and how would you deal with this
+missing value? - The output above provides evidence that the missingness
+may be meaningful because missing race has one of the highest mean
+days. - We do not know if these are missing because of a data collection
+error or the values are routinely unavailable. Because we do not know
+whether it is missing at random, we should keep it and see whether it
+being unavailable has predictive power. For example, we can creat a new
+race category called “Missing.”
+
+**Question**: I convert admit_type_id to a factor. Explain why. Convert
+numeric variable type to factor variable type
+
+The admin_type_id variable was coded as a numeric variable. Since the
+numeric values are codes representing categorical data, the variable was
+changed to a factor variable.
+
+```{r}
+data.all$admit_type_id <- as.factor(data.all$admit_type_id)
+```
+
+```{r}
+#data.all = select(data.all, -weight)
+#Or
+data.all$weight <- NULL
+```
+
+Removing observations with invalid genders.
+
+```{r}
+data.all <- subset(data.all, gender != "Unknown/Invalid")
+data.all$gender <- droplevels(as.factor(data.all$gender))
+```
+
+**Question**: Regrouping the levels of the race variable. Asian,
+Hispanic, and Other will be in the same category. Explain why?
+
+We combined the “Asian”, “Hispanic”, and “Other” levels because they
+each had somewhat low frequencies and similar relationships to the days
+variable.
+
+```{r}
+var.levels <- levels(as.factor(data.all$race)) 
+data.all$race <- mapvalues(
+  as.factor(data.all$race), var.levels,
+  c("Missing","AfricanAmerican", "Other", "Caucasian", "Other", "Other")
+)
+table(data.all$race)
+```
+
+Releveling factor variables using the code below. The factor variable
+levels were reordered so that the most frequent level was first.
+
+```{r}
+vars <- c("gender", "age", "race", "metformin", "insulin", "readmitted", "admit_type_id") # Change list of factor variables to relevel as needed
+
+for (i in vars) {
+  table <- as.data.frame(table(data.all[, i]))
+  max <- which.max(table[, 2])
+  level.name <- as.character(table[max, 1])
+  data.all[, i] <- relevel(as.factor(data.all[, i]), ref = level.name)
+}
+```
+
+## Explore the data.
+
+Examine the variables and their relationships to the target variable.
+
+Code has been provided to explore the data. You can modify and use some
+or all of this code to explore the data.
+
+Descriptive statistics
+
+Producing some summary statistics for the variables.
+
+```{r}
+
+summary(data.all)
+```
+
+Examining the univariate distrubtions using bar charts.
+
+```{r}
+
+library(ggplot2)
+vars <- colnames(data.all)
+
+for (i in vars) {
+  plot <- ggplot(data.all, aes(x = data.all[, i])) +
+    geom_bar() +
+    labs(x = i) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  print(plot)
+}
+
+rm(i, vars, plot)
+```
+
+The target variable is the number of days between admission into and
+discharge from the hospital. The variable takes on integer values from 1
+to 14. The center of the distribution is around 4 to 4.5 days based on
+the median/mean. From the bar chart, we can see that the distribution is
+skewed right with 2-3 days being the most frequent length of stay in the
+hospital.
+
+Examining the mean days for each variable value.
+
+```{r}
+# This chunk provides means of the target variable split by predictors.
+vars <- colnames(data.all)
+
+for (i in vars) {
+  x <- data.all %>%
+    group_by_(i) %>%
+    summarise(
+      mean = mean(days),
+      median = median(days),
+      n = n()
+    )
+
+  print(x)
+}
+
+rm(i, vars, x)
+```
+
+Correlations of the target variable to numeric variables and correlation
+matrix.
+
+Examining correlation matrix
+
+```{r}
+
+# Calculate the correlation matrix for numeric variables
+cor.matrix <- cor(data.all[, sapply(data.all, is.numeric)])
+
+print("Correlation Matrix")
+cor.matrix
+```
+
+Visually inspecting the relationships between the numeric variables and
+the target variable.
+
+```{r}
+ggplot(data.all, aes(x = num_procs, y = days)) +
+  geom_count(aes(color = ..n..))
+
+ggplot(data.all, aes(x = num_meds, y = days)) +
+  geom_count(aes(color = ..n..))
+
+ggplot(data.all, aes(x = num_ip, y = days)) +
+  geom_count(aes(color = ..n..))
+
+ggplot(data.all, aes(x = num_diags, y = days)) +
+  geom_count(aes(color = ..n..))
+```
+
+Split histograms and boxplots of target by factor variables.
+
+Copy and add code for other factors as needed.
+
+```{r}
+
+library(gridExtra)
+
+# Explore target days vs. gender.
+
+# Split histogram
+p1 <- ggplot(data.all, aes(
+  x = days,
+  group = gender, fill = gender, y = ..density..
+)) +
+  geom_histogram(position = "dodge", binwidth = 1) # Replace gender twice for other variables
+
+# Boxplot
+p2 <- ggplot(data = data.all, aes(
+  x = gender, y = days,
+  fill = gender
+)) +
+  geom_boxplot(alpha = 0.5) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5)) # Replace gender twice for other variables
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+Producing similar plots for other factor variables
+
+```{r}
+
+# Explore target days vs. age.
+
+# Split histogram
+p1 <- ggplot(data.all, aes(
+  x = days,
+  group = age, fill = age, y = ..density..
+)) +
+  geom_histogram(position = "dodge", binwidth = 1) # Replace gender twice for other variables
+
+# Boxplot
+p2 <- ggplot(data = data.all, aes(
+  x = age, y = days,
+  fill = age
+)) +
+  geom_boxplot(alpha = 0.5) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5)) # Replace gender twice for other variables
+
+grid.arrange(p1, p2, ncol = 2)
+
+
+# Explore target days vs. race
+
+# Split histogram
+p1 <- ggplot(data.all, aes(
+  x = days,
+  group = race, fill = race, y = ..density..
+)) +
+  geom_histogram(position = "dodge", binwidth = 1) # Replace gender twice for other variables
+
+# Boxplot
+p2 <- ggplot(data = data.all, aes(
+  x = race, y = days,
+  fill = race
+)) +
+  geom_boxplot(alpha = 0.5) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5)) # Replace gender twice for other variables
+
+grid.arrange(p1, p2, ncol = 2)
+
+
+# Explore target days vs. admit_type_id
+
+# Split histogram
+p1 <- ggplot(data.all, aes(
+  x = days,
+  group = admit_type_id, fill = admit_type_id, y = ..density..
+)) +
+  geom_histogram(position = "dodge", binwidth = 1) # Replace gender twice for other variables
+
+# Boxplot
+p2 <- ggplot(data = data.all, aes(
+  x = admit_type_id, y = days,
+  fill = admit_type_id
+)) +
+  geom_boxplot(alpha = 0.5) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5)) # Replace gender twice for other variables
+
+grid.arrange(p1, p2, ncol = 2)
+
+
+# Explore target days vs. metformin
+
+# Split histogram
+p1 <- ggplot(data.all, aes(
+  x = days,
+  group = metformin, fill = metformin, y = ..density..
+)) +
+  geom_histogram(position = "dodge", binwidth = 1) # Replace gender twice for other variables
+
+# Boxplot
+p2 <- ggplot(data = data.all, aes(
+  x = metformin, y = days,
+  fill = metformin
+)) +
+  geom_boxplot(alpha = 0.5) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5)) # Replace gender twice for other variables
+
+grid.arrange(p1, p2, ncol = 2)
+
+
+# Explore target days vs. insulin
+
+# Split histogram
+p1 <- ggplot(data.all, aes(
+  x = days,
+  group = insulin, fill = insulin, y = ..density..
+)) +
+  geom_histogram(position = "dodge", binwidth = 1) # Replace gender twice for other variables
+
+# Boxplot
+p2 <- ggplot(data = data.all, aes(
+  x = insulin, y = days,
+  fill = insulin
+)) +
+  geom_boxplot(alpha = 0.5) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5)) # Replace gender twice for other variables
+
+grid.arrange(p1, p2, ncol = 2)
+
+
+# Explore target days vs. readmitted
+
+# Split histogram
+p1 <- ggplot(data.all, aes(
+  x = days,
+  group = readmitted, fill = readmitted, y = ..density..
+)) +
+  geom_histogram(position = "dodge", binwidth = 1) # Replace gender twice for other variables
+
+# Boxplot
+p2 <- ggplot(data = data.all, aes(
+  x = readmitted, y = days,
+  fill = readmitted
+)) +
+  geom_boxplot(alpha = 0.5) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5)) # Replace gender twice for other variables
+
+grid.arrange(p1, p2, ncol = 2)
+
+# making the boxplot for insulin for the report
+ggplot(data = data.all, aes(
+  x = insulin, y = days,
+  fill = insulin
+)) +
+  geom_boxplot(alpha = 0.5) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5)) # Replace gender twice for other variables
+```
+
+**Question**: Which variables would you select for modelling purposes
+later by investigating variables and the relationship to the target
+variable?
+
+Insulin, age, and num_meds appear to have strong relationships to the
+target variable.
+
+-   The insulin variable indicates whether, upon admission, insulin was
+    prescribed or there was a change in the dosage. About half of the
+    records did not have insulin prescribed upon admission and these
+    records were admitted on average over a day less than records where
+    insulin was increased upon admission. The boxplots show that the
+    median and 3rd quartile number of days are also lower when insulin
+    is not prescribed. Changes to insulin dosages also had higher mean
+    days.
+
+-   The age variable is a factor variable, and frequency counts can be
+    seen in the bar chart and table below. Most of our data has ages
+    between 50 and 90, with 70-80 containing the most data. If age were
+    numeric, we would say it was skewed left. The table and box plots
+    below show that for the most part as age increases, days increases.
+    There is a sizeable difference (over 1.5 days) between mean days for
+    the age bins with the highest mean days and the lowest mean days. It
+    makes sense that older patients tend to stay longer since they tend
+    to be in poorer health, and the relationship appears to be strong.
+
+-   The num_meds variable takes on integer values from 1 to 67. The
+    center of the distribution is around 15 to 16 based on the
+    median/mean. From the bar chart, we can see that the distribution is
+    skewed right with 13 being the most frequent number of medications.
+    The correlation between num_meds and days was 0.472, which was the
+    strongest correlation among the numeric variables. The scatterplot,
+    with point size/color based on frequency below shows that as the
+    number of medications increases, the days increases. Like the other
+    variables selected, this relationship makes intuitive sense –
+    patients taking many medications likely have more underlying
+    conditions, have poorer overall health, and may require a longer
+    hospital stay to address those concerns. I selected this variable
+    because the relationship to the target variable was the strongest of
+    the numeric variables and the narrative makes sense.
+
+## Modelling
+
+Split the data into training and test data sets.
+
+```{r}
+# Split the data into training and test data sets.
+
+library(caret)
+set.seed(100)
+train_ind <- createDataPartition(data.all$days, p = 0.7, list = FALSE)
+data.train <- data.all[train_ind, ]
+data.test <- data.all[-train_ind, ]
+
+print("TRAIN")
+mean(data.train$days)
+
+print("TEST")
+mean(data.test$days)
+
+print("ALL")
+mean(data.all$days)
+
+
+rm(train_ind)
+```
+
+### Random Forest {.unnumbered}
+
+**Question**: Explain the process of using out-of-bag errors to select
+the hyper-parameter 'mtry'. What is the selected value of 'mtry' ?
+
+-   For each observation $z_i = (x_i , y_i)$, construct its random
+    forest predictor by averaging only those trees corresponding to
+    bootstrap samples in which $z_i$ did not appear.
+-   Random forests can be fit in one sequence, with CV being performed
+    along the way.
+-   Once the OOB error stabilizes, the training can be terminated.
+-   mtry=2
+
+```{r}
+
+# Set target
+
+target <- data.train$days
+
+# Set predictors
+vars.list <- c("gender", "age", "race", "metformin", "insulin", "readmitted", "admit_type_id", "num_procs", "num_meds", "num_ip", "num_diags")
+
+predictors <- data.train[,vars.list]
+
+# Set up the grid.
+rfGrid <- expand.grid(mtry = c(1:3))
+
+# Set the controls.
+ctrl <- trainControl(
+  method = "oob"
+)
+
+# Train the model.
+rf <- train(
+  y = target,
+  x = predictors,
+  method = "rf",
+  trControl = ctrl,
+  tuneGrid = rfGrid,
+  ntree = 100,
+  nodesize = 5,
+  maxdepth = 5,
+  importance = TRUE
+)
+
+# View the output.
+rf
+plot(rf)
+
+# Obtain the importance of the features.
+plot(varImp(rf))
+
+#predict on the test data 
+
+predrf.test <- predict(rf,newdata = data.test)
+
+postResample(pred = predrf.test, obs = data.test$days)
+
+```
+
+### GBM {.unnumbered}
+
+**Question**: Explain the importance of the values of the two
+hyper-parameters "shrinkage parameter (learning rate)" and "number of
+trees" in GBM and how they may affect the modelling results.
+
+The number of trees B - overfit if B is too large
+
+The shrinkage parameter - controls the rate at which boosting learns
+(learning rate) - a small positive numbertypical values are 0.01 or
+0.001 - slows down the rate of overfitting
+
+```{r}
+library(gbm)
+
+gbmGrid <-  expand.grid(interaction.depth = c(1, 2, 3), 
+                        n.trees = c(50, 100, 150), 
+                        shrinkage = 0.1,
+                        n.minobsinnode = 10)
+
+fitControl <- trainControl(## 10-fold CV
+                           method = "repeatedcv",
+                           number = 10,
+                           ## repeated ten times
+                           repeats = 10)
+
+gbmFit1 <- train( days ~ ., data = data.train, 
+                 method = "gbm", 
+                 trControl = fitControl,
+                 verbose = FALSE,
+                 tuneGrid = gbmGrid)
+gbmFit1
+plot(gbmFit1)
+
+# Obtain the importance of the features.
+plot(varImp(gbmFit1))
+
+
+#predict on the test data 
+
+predgbm.test <- predict(gbmFit1,newdata = data.test)
+
+postResample(pred = predgbm.test, obs = data.test$days)
+
+```
+
+**Question**: Which model will you choose based on this result? Explain
+your answer with reasons.
+
+GBM + explanations
+
+### Construct a generalized linear model (GLM) {.unnumbered}
+
+Fit a GLM with all original variables included.
+
+```{r}
+# Fit the model
+glm1 <- glm(days ~ .,
+  data = data.train,
+  family = poisson(link = "log")
+)
+
+summary(glm1)
+
+# Predict on training data
+glm1.pred.train <- predict(glm1, data.train, type = "response")
+
+# Calculate the Pearson goodness-of-fit statistic on training data
+sum((data.train$days - glm1.pred.train)^2 / glm1.pred.train) / nrow(data.train)
+
+# Predict on test data
+glm1.pred.test <- predict(glm1, data.test, type = "response")
+
+# Calculate the Pearson goodness-of-fit statistic on test data
+sum((data.test$days - glm1.pred.test)^2 / glm1.pred.test) / nrow(data.test)
+```
+
+We perform feature selection with lasso regression. We use
+cross-validation to determine appropriate level of lambda for lasso
+regression.
+
+```{r}
+library(glmnet)
+
+# Format data as matrices (necessary for glmnet). Uncomment two items that reflect your decision from Task 7.
+
+lasso.mat.train <- model.matrix(days ~ . , data.train)
+lasso.mat.test <- model.matrix(days ~ . , data.test)
+# lasso.mat.train <- model.matrix(days ~ . - num_procs - num_meds - num_ip - num_diags, data.train)
+# lasso.mat.test <- model.matrix(days ~ . - num_procs - num_meds - num_ip - num_diags, data.test)
+
+set.seed(789)
+
+lasso.cv <- cv.glmnet(
+  x = lasso.mat.train,
+  y = data.train$days,
+  family = "poisson", # Do not change.
+  alpha = 1 # alpha = 1 for lasso
+)
+```
+
+Use the cross-validation results to run the final lasso regression
+model.
+
+Using the code supplied to fit the final lasso model and measure the
+performance.
+
+```{r}
+# Fit the model
+lasso <- glmnet(
+  x = lasso.mat.train,
+  y = data.train$days,
+  family = "poisson", 
+  lambda = lasso.cv$lambda.1se,
+  alpha = 1 # alpha = 1 for lasso
+)
+
+# List variables
+lasso$beta
+
+# Predict on training data
+lasso.pred.train <- predict(lasso, lasso.mat.train, type = "response")
+
+# Calculate the Pearson goodness-of-fit statistic on training data
+sum((data.train$days - lasso.pred.train)^2 / lasso.pred.train) / nrow(data.train)
+
+# Predict on test data
+lasso.pred.test <- predict(lasso, lasso.mat.test, type = "response")
+
+# Calculate the Pearson goodness-of-fit statistic on test data
+sum((data.test$days - lasso.pred.test)^2 / lasso.pred.test) / nrow(data.test)
+```
+
+```{r}
+# Fit the model
+glmfinal <- glm(days ~ .,
+  data = data.all,
+  family = poisson(link = "log") 
+)
+
+summary(glmfinal)
+
+```
+
+To justify that my model is useful, I compare the model test set
+performance to an intercept-only model which results in mean days as the
+predicted length of stay for all patients.
+
+```{r}
+# Fit the model
+glmnone <- glm(days ~ 1,
+  data = data.train,
+  family = poisson(link = "log") # Do not change.
+)
+
+summary(glmnone)
+
+# Predict on training data
+glmnone.pred.train <- predict(glmnone, data.train, type = "response")
+
+# Calculate the Pearson goodness-of-fit statistic on training data
+sum((data.train$days - glmnone.pred.train)^2 / glmnone.pred.train) / nrow(data.train)
+
+# Predict on test data
+glmnone.pred.test <- predict(glmnone, data.test, type = "response")
+
+# Calculate the Pearson goodness-of-fit statistic on test data
+sum((data.test$days - glmnone.pred.test)^2 / glmnone.pred.test) / nrow(data.test)
+```
+
+**Question**: What other measures you could use to compare the model
+performance? Discuss their advantages and limitations. - AIC, BIC - CV
+error - Bootstrap error
+
+Discussions on Advantages and Disadvantages should be provided (refer to
+class discussions).
